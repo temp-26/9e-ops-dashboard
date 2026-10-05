@@ -1,0 +1,8 @@
+node_modules
+dist
+.DS_Store
+*.log
+# The Excel file stays on your computer only (it contains ID numbers).
+# Only src/data/data.json (with ID columns removed) goes to GitHub.
+data/*.xlsx
+data/~$*
