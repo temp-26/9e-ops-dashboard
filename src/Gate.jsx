@@ -47,8 +47,8 @@ export default function Gate() {
     <div className="gate">
       <form className="gate-card" onSubmit={submit}>
         <img src={logo} alt="9E Global" className="logo" />
-        <div className="eyebrow">People &amp; Culture · HR Dashboard</div>
-        <h1>Operations Board Meeting</h1>
+        <div className="eyebrow">9E Global · People &amp; Culture</div>
+        <h1>HR Workforce Intelligence</h1>
         <p className="muted">This dashboard holds confidential staff data. Enter the password to open it.</p>
         <label htmlFor="pw">Password</label>
         <input id="pw" type="password" autoFocus autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} disabled={busy} />

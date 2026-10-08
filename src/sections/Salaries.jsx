@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { GROUPS, REDUCTION_DATE } from '../lib/model.js';
 import { fmtDate } from '../lib/data.js';
-import { Section, Card, Kpi, DataTable, ShowTable, Toggle, fmtInt, fmtCompact } from '../components/ui.jsx';
+import { Section, Card, Kpi, DataTable, ShowTable, Toggle, fmtInt, fmtNum, fmtCompact } from '../components/ui.jsx';
 import { Bars, C } from '../components/charts.jsx';
 import { DeptTrend } from '../components/trends.jsx';
-import { useDrill } from '../components/drill.jsx';
+import { useDrill, Num, asMixed } from '../components/drill.jsx';
 
 const DEPT_LABEL = { STR: 'Structures', 'Buss. Support': 'Business Support', Infra: 'Infrastructure', PM: 'Project Management' };
 const SCOPES = [{ value: 'all', label: 'UAE & India' }, { value: 'UAE', label: 'UAE' }, { value: 'India', label: 'India' }];
@@ -20,6 +20,25 @@ function MonthlyTable({ rows }) {
   return <DataTable dense columns={cols} rows={body} />;
 }
 
+function WorkforceCost({ m }) {
+  const s = m.summary();
+  const dub = m.active.filter((p) => p.entity === 'Dubai');
+  const ind = m.active.filter((p) => p.entity === 'India');
+  return (
+    <Card title="Monthly Workforce Cost" eyebrow={`AED · as of ${fmtDate(m.asOf)}`}>
+      <DataTable columns={[
+        { key: 'seg', label: 'Segment' }, { key: 'hc', label: 'Headcount', num: true, render: (r) => <Num rows={r.list} kind={r.kind} title={r.seg}>{fmtInt(r.hc)}</Num> },
+        { key: 'cost', label: 'Monthly Cost (AED)', num: true, render: (r) => fmtNum(r.cost, 2) },
+      ]} rows={[
+        { seg: 'Dubai permanent', hc: s.dubai, cost: s.dubCost, list: dub.map((p) => ({ ...p, amount: m.salary(p, m.asOf, 'salary') })), kind: 'salary' },
+        { seg: 'India permanent', hc: s.india, cost: s.indCost, list: ind.map((p) => ({ ...p, amount: p.salaryAed })), kind: 'salary' },
+        { seg: 'Temp staff (active)', hc: s.temp, cost: s.tempCost, list: m.activeTemps, kind: 'temps' },
+        { seg: 'Total workforce cost', hc: s.total + s.temp, cost: s.dubCost + s.indCost + s.tempCost, _total: true, list: asMixed(m.active, m.activeTemps), kind: 'mixed' },
+      ]} />
+      <p className="hint">India here is "Monthly Salary in AED" (no Access margin); temp cost converts INR and hourly rates as in the Excel.</p>
+    </Card>
+  );
+}
 
 export default function Salaries({ m }) {
   const [basis, setBasis] = useState('access');
@@ -57,6 +76,8 @@ export default function Salaries({ m }) {
           ]} />
         </div>
       </div>
+
+      <WorkforceCost m={m} />
 
       <Card title={`Monthly salaries – ${scopeLabel}`} eyebrow={`AED · ${m.months[0].label} to ${fmtDate(m.asOf)}`}>
         <Bars money data={chart} cat="name" stacked series={series} height={320}

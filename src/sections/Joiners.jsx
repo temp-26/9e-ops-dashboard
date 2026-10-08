@@ -47,7 +47,7 @@ export default function Joiners({ m }) {
         <Kpi label={`Joined in ${m.year}`} value={fmtInt(ytd.length)} sub={`${stillHere} still with us`} onClick={() => open(`New joiners in ${m.year}`, ytd, 'people')} />
         <Kpi label="Dubai" value={fmtInt(dubai)} onClick={() => open(`New joiners in ${m.year} – Dubai`, ytd.filter((p) => p.entity === 'Dubai'), 'people')} />
         <Kpi label="India" value={fmtInt(ytd.length - dubai)} onClick={() => open(`New joiners in ${m.year} – India`, ytd.filter((p) => p.entity === 'India'), 'people')} />
-        <Kpi label="Joining later" value={fmtInt(m.joiningLater.length)} sub="Start date after as-of or TBC" onClick={() => open('Joining later', m.joiningLater, 'people')} />
+        <Kpi label="Future joiners" value={fmtInt(m.joiningLater.length)} sub="Start date after as-of or TBC" onClick={() => open('Future joiners', m.joiningLater, 'people')} />
       </div>
 
       <div className="grid-1-1">
@@ -73,7 +73,7 @@ export default function Joiners({ m }) {
         </>} />
       </Card>
 
-      <Card title="Joining later" eyebrow="On the staff lists, start date after the as-of date or TBC">
+      <Card title="Future joiners" eyebrow="On the staff lists, start date after the as-of date or TBC">
         <DetailTable columns={cols.filter((c) => c.key !== 'status').map((c) => (c.key === 'start' ? { ...c, render: (p) => (p.start ? fmtDate(p.start) : String(p.startRaw ?? 'TBC')), text: (p) => (p.start ? fmtDate(p.start) : 'TBC') } : c))} rows={m.joiningLater} maxHeight={360} />
       </Card>
 

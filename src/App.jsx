@@ -31,11 +31,15 @@ const fromHash = () => {
   return TABS.some((t) => t.id === h) ? h : 'overview';
 };
 const iso = (d) => d.toISOString().slice(0, 10);
+// Today's date on the viewer's computer — the dashboard always opens "as of today".
+const now = new Date();
+const TODAY = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+const MAX_DATE = TODAY > EXCEL_AS_OF ? TODAY : EXCEL_AS_OF;
 const minDate = `${EXCEL_AS_OF.getUTCFullYear()}-01-01`;
 
 export default function App() {
   const [tab, setTab] = useState(fromHash);
-  const [asOfStr, setAsOfStr] = useState(iso(EXCEL_AS_OF));
+  const [asOfStr, setAsOfStr] = useState(iso(MAX_DATE));
   useEffect(() => {
     const on = () => setTab(fromHash());
     window.addEventListener('hashchange', on);
@@ -43,10 +47,10 @@ export default function App() {
   }, []);
 
   const parsed = new Date(`${asOfStr}T00:00:00Z`);
-  const asOf = Number.isNaN(parsed.getTime()) ? EXCEL_AS_OF : new Date(Math.min(Math.max(parsed, new Date(`${minDate}T00:00:00Z`)), EXCEL_AS_OF));
+  const asOf = Number.isNaN(parsed.getTime()) ? EXCEL_AS_OF : new Date(Math.min(Math.max(parsed, new Date(`${minDate}T00:00:00Z`)), MAX_DATE));
   const m = makeModel(asOf);
   const Active = TABS.find((t) => t.id === tab).C;
-  const isLatest = asOf.getTime() === EXCEL_AS_OF.getTime();
+  const isLatest = asOf.getTime() === MAX_DATE.getTime();
 
   return (
     <DrillProvider>
@@ -56,15 +60,15 @@ export default function App() {
           <div className="brand">
             <img src={logo} alt="9E Global" className="logo" />
             <div>
-              <div className="eyebrow">People &amp; Culture · HR Dashboard</div>
-              <h1>Operations Board Meeting</h1>
+              <div className="eyebrow">9E Global · People &amp; Culture</div>
+              <h1>HR Workforce Intelligence</h1>
             </div>
           </div>
           <div className="asof">
             <label htmlFor="asof">As of date</label>
             <div className="asof-row">
-              <input id="asof" type="date" value={iso(asOf)} min={minDate} max={iso(EXCEL_AS_OF)} onChange={(e) => e.target.value && setAsOfStr(e.target.value)} />
-              {!isLatest && <button className="link" onClick={() => setAsOfStr(iso(EXCEL_AS_OF))}>Latest</button>}
+              <input id="asof" type="date" value={iso(asOf)} min={minDate} max={iso(MAX_DATE)} onChange={(e) => e.target.value && setAsOfStr(e.target.value)} />
+              {!isLatest && <button className="link" onClick={() => setAsOfStr(iso(MAX_DATE))}>Today</button>}
               <button className="lock-btn" onClick={lock} title="Lock the dashboard">Lock</button>
             </div>
           </div>
@@ -79,7 +83,7 @@ export default function App() {
       <footer className="foot">
         <div className="foot-inner">
           <span><b>9E Global</b> &nbsp;|&nbsp; Engineering a Better World</span>
-          <span>Data: {META.sourceFile} · as of {fmtDate(asOf)}</span>
+          <span>Data: {META.sourceFile} (Excel dated {fmtDate(EXCEL_AS_OF)}) · showing {fmtDate(asOf)}</span>
         </div>
       </footer>
     </div>
