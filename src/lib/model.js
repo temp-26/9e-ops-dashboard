@@ -1,8 +1,8 @@
 // Business logic: turns the raw Excel sheets into the people lists and figures the
 // dashboard shows. Nothing here is hard-coded data — every number is computed from
-// src/data/data.json, which is produced from the Excel file by `npm run update-data`.
+// the workforce data (decrypted from public/data.enc.json, produced from the Excel by `npm run update-data`).
 import {
-  table, cells, toDate, toNum, text, isBlank, monthEnd, monthStart, monthLabel,
+  table, cells, hasSheet, toDate, toNum, text, isBlank, monthEnd, monthStart, monthLabel,
 } from './data.js';
 
 // ---------- Department vocabulary (PPT terms) ----------
@@ -31,144 +31,212 @@ export function groupOf(dept) {
 export const EXCEL_DEPTS = ['Structures', 'MEP', 'Structures-Site', 'MEP-Site', 'Business Support',
   'Project Management', 'Infrastructure', 'AVIT', 'AOR', 'Geotech'];
 
-// ---------- Settings from the Checks sheet ----------
+// ---------- Settings from the Checks sheet (optional) ----------
+// If the Excel has no Checks sheet, these are worked out from the data instead (see rebuild()).
+export const DEFAULT_HOURS = 160; // hours a month for hourly-paid temps when the Excel doesn't say
 function checksValue(label) {
+  if (!hasSheet('Checks')) return null;
   for (const row of cells('Checks')) {
     const i = row.findIndex((v) => text(v).toLowerCase() === label.toLowerCase());
     if (i >= 0) return row[i + 1];
   }
   return null;
 }
-const AS_OF = toDate(checksValue('As-of date'));
-const INR_PER_AED = toNum(checksValue('INR per 1 AED'));
-const HOURS = toNum(checksValue('Hours / month (hourly temps)'));
-export const SETTINGS = { asOf: AS_OF, inrPerAed: INR_PER_AED, hoursPerMonth: HOURS };
-export const EXCEL_AS_OF = AS_OF;
+// Spelling clean-up for display only (the data itself is untouched).
+const LOC_FIX = { 'andra pradesh': 'Andhra Pradesh', bengaluru: 'Bangalore', cochin: 'Kochi', bombay: 'Mumbai' };
+const fixLocation = (v) => LOC_FIX[text(v).toLowerCase()] ?? text(v);
 
-// ---------- Salary reduction register ----------
-const SR = (() => {
-  const c = cells('Salary Reduction (Jun-26)');
-  const hr = c.findIndex((r) => r.some((v) => text(v) === 'Employee Name'));
-  return table('Salary Reduction (Jun-26)', hr);
-})();
-const nameKey = (s) => text(s).toLowerCase().replace(/[^a-z]/g, '');
-export const REDUCTION = SR.rows
-  .filter((r) => !isBlank(SR.get(r, 'Employee Name')))
-  .map((r) => ({
-    no: SR.get(r, 'No.'), dept: text(SR.get(r, 'Department')), name: text(SR.get(r, 'Employee Name')),
-    title: text(SR.get(r, 'Job Title')), effective: toDate(SR.get(r, 'Effective Date')),
-    current: toNum(SR.get(r, 'Current Salary (AED)')), cut: toNum(SR.get(r, 'Cut %')),
-    reducedAmount: toNum(SR.get(r, 'Reduced Amount (AED)')), reduced: toNum(SR.get(r, 'Reduced Salary (AED)')),
-    emailSent: text(SR.get(r, 'Email Sent')), signed: SR.get(r, 'Signed'), inRoster: text(SR.get(r, 'In Roster')),
-  }));
-export const REDUCTION_DATE = REDUCTION.find((r) => r.effective)?.effective ?? null;
-const reductionByName = Object.fromEntries(REDUCTION.map((r) => [nameKey(r.name), r]));
+/** Today's date on this computer, as a UTC midnight date (how all dates are held here). */
+export function todayDate() {
+  const n = new Date();
+  return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()));
+}
 
-// ---------- Permanent staff (FTE) ----------
-const gender = (v) => { const t = text(v).toLowerCase(); return t === 'male' ? 'Male' : t === 'female' ? 'Female' : null; };
-const isBimRole = (s) => /\bbim\b/i.test(s);
+function impliedInrRate() {
+  if (!hasSheet('India Details')) return null;
+  const I = table('India Details');
+  const r = I.rows.map((row) => toNum(I.get(row, 'salary in offer letter (INR)')) / 12 / toNum(I.get(row, 'Monthly Salary in AED')))
+    .filter((v) => Number.isFinite(v) && v > 5 && v < 60).sort((a, b) => a - b);
+  return r.length ? Math.round(r[Math.floor(r.length / 2)] * 100) / 100 : null;
+}
+// Values below are (re)built from the current data by rebuild() — called after the
+// data is decrypted and again whenever "Refresh data" loads a newer copy.
+let AS_OF, INR_PER_AED, HOURS, reductionByName, leaverKnown;
+export let SETTINGS, EXCEL_AS_OF, REDUCTION, REDUCTION_DATE, PERMANENT, LEAVERS, TEMPS, ACCESS_RATIO;
 
-const D = table('Dubai Details');
-const dubai = D.rows.filter((r) => !isBlank(D.get(r, 'Employee Name'))).map((r) => {
-  const deptRole = text(D.get(r, 'Dept Role'));
-  const role = text(D.get(r, 'Role'));
-  const title = text(D.get(r, 'Job Title'));
-  return {
-    entity: 'Dubai', country: 'UAE', location: text(D.get(r, 'Location')) || 'Dubai',
-    dept: text(D.get(r, 'Dept.')), group: groupOf(D.get(r, 'Dept.')),
-    payroll: text(D.get(r, 'Payroll No.')), name: text(D.get(r, 'Employee Name')), title, role, deptRole,
-    grading: toNum(D.get(r, 'Grading')), startRaw: D.get(r, 'Start Date'), start: toDate(D.get(r, 'Start Date')),
-    age: toNum(D.get(r, 'Age')), gender: gender(D.get(r, 'Gender')), nationality: text(D.get(r, 'Nationality')),
-    exp: toNum(D.get(r, 'Total Years of Experience')), manager: text(D.get(r, 'L1')),
-    salaryPre: toNum(D.get(r, 'Total Current Salary')),
-    salaryPost: toNum(D.get(r, 'Effective Salary Jun-26 (AED)')),
-    bim: isBimRole(deptRole) || (!deptRole && isBimRole(`${role} ${title}`)),
-  };
-});
+export function rebuild() {
+  // As-of date: always TODAY on the viewer's computer (it moves on by itself every day).
+  AS_OF = todayDate();
+  // INR rate: Checks sheet, else implied by India Details (offer-letter INR a year ÷ 12 ÷ monthly AED).
+  INR_PER_AED = toNum(checksValue('INR per 1 AED')) ?? impliedInrRate();
+  HOURS = toNum(checksValue('Hours / month (hourly temps)')) ?? DEFAULT_HOURS;
+  SETTINGS = { asOf: AS_OF, inrPerAed: INR_PER_AED, hoursPerMonth: HOURS, hoursAssumed: toNum(checksValue('Hours / month (hourly temps)')) === null };
+  EXCEL_AS_OF = AS_OF;
 
-const I = table('India Details');
-const india = I.rows.filter((r) => !isBlank(I.get(r, 'Employee Name'))).map((r) => {
-  const role2 = text(I.get(r, 'Role', 1));
-  const sal = toNum(I.get(r, 'Monthly Salary in AED'));
-  return {
-    entity: 'India', country: 'India', location: text(I.get(r, 'Location')),
-    dept: text(I.get(r, 'Dept.')), group: groupOf(I.get(r, 'Dept.')),
-    payroll: text(I.get(r, 'Payroll No.')), name: text(I.get(r, 'Employee Name')), title: text(I.get(r, 'Job Title')),
-    role: text(I.get(r, 'Role', 0)), deptRole: role2, grading: toNum(I.get(r, 'Grading')),
-    startRaw: I.get(r, 'Start Date'), start: toDate(I.get(r, 'Start Date')),
-    age: toNum(I.get(r, 'Age')), gender: gender(I.get(r, 'Gender')), nationality: 'Indian (India entity)',
-    exp: toNum(I.get(r, 'Total Years of Experience')), expGrad: toNum(I.get(r, 'Years of Experience from graduation')),
-    manager: text(I.get(r, 'Line Manager')),
-    salaryAed: sal, salaryAccess: toNum(I.get(r, 'Total Monthly Salary in AED')),
-    accessMargin: toNum(I.get(r, 'Access - Margin Cost')),
-    bim: isBimRole(role2),
-  };
-});
-export const PERMANENT = [...dubai, ...india];
+  // ---------- Salary reduction register ----------
+  const SR = (() => {
+    const c = cells('Salary Reduction (Jun-26)');
+    const hr = c.findIndex((r) => r.some((v) => text(v) === 'Employee Name'));
+    return table('Salary Reduction (Jun-26)', hr);
+  })();
+  const nameKey = (s) => text(s).toLowerCase().replace(/[^a-z]/g, '');
+  REDUCTION = SR.rows
+    .filter((r) => !isBlank(SR.get(r, 'Employee Name')))
+    .map((r) => ({
+      no: SR.get(r, 'No.'), dept: text(SR.get(r, 'Department')), name: text(SR.get(r, 'Employee Name')),
+      title: text(SR.get(r, 'Job Title')), effective: toDate(SR.get(r, 'Effective Date')),
+      current: toNum(SR.get(r, 'Current Salary (AED)')), cut: toNum(SR.get(r, 'Cut %')),
+      reducedAmount: toNum(SR.get(r, 'Reduced Amount (AED)')), reduced: toNum(SR.get(r, 'Reduced Salary (AED)')),
+      emailSent: text(SR.get(r, 'Email Sent')), signed: SR.get(r, 'Signed'), inRoster: text(SR.get(r, 'In Roster')),
+    }));
+  REDUCTION_DATE = REDUCTION.find((r) => r.effective)?.effective ?? null;
+  reductionByName = Object.fromEntries(REDUCTION.map((r) => [nameKey(r.name), r]));
 
-// India "35% Access" margin as found in the data (Access margin ÷ monthly salary), used for leavers.
-const ratios = india.filter((p) => p.salaryAed && p.accessMargin).map((p) => p.accessMargin / p.salaryAed).sort((a, b) => a - b);
-export const ACCESS_RATIO = ratios.length ? ratios[Math.floor(ratios.length / 2)] : 0;
+  // ---------- Permanent staff (FTE) ----------
+  const gender = (v) => { const t = text(v).toLowerCase(); return t === 'male' ? 'Male' : t === 'female' ? 'Female' : null; };
+  const isBimRole = (s) => /\bbim\b/i.test(s);
+
+  const D = table('Dubai Details');
+  const dubai = D.rows.filter((r) => !isBlank(D.get(r, 'Employee Name'))).map((r) => {
+    const deptRole = text(D.get(r, 'Dept Role'));
+    const role = text(D.get(r, 'Role'));
+    const title = text(D.get(r, 'Job Title'));
+    return {
+      entity: 'Dubai', country: 'UAE', location: text(D.get(r, 'Location')) || 'Dubai',
+      dept: text(D.get(r, 'Dept.')), group: groupOf(D.get(r, 'Dept.')),
+      payroll: text(D.get(r, 'Payroll No.')), name: text(D.get(r, 'Employee Name')), title, role, deptRole,
+      grading: toNum(D.get(r, 'Grading')), startRaw: D.get(r, 'Start Date'), start: toDate(D.get(r, 'Start Date')),
+      age: toNum(D.get(r, 'Age')), gender: gender(D.get(r, 'Gender')), nationality: text(D.get(r, 'Nationality')),
+      exp: toNum(D.get(r, 'Total Years of Experience')), manager: text(D.get(r, 'L1')),
+      salaryPre: toNum(D.get(r, 'Total Current Salary')),
+      salaryPost: toNum(D.get(r, 'Effective Salary Jun-26 (AED)')),
+      bim: isBimRole(deptRole) || (!deptRole && isBimRole(`${role} ${title}`)),
+    };
+  });
+
+  const I = table('India Details');
+  const india = I.rows.filter((r) => !isBlank(I.get(r, 'Employee Name'))).map((r) => {
+    const role2 = text(I.get(r, 'Role', 1));
+    const sal = toNum(I.get(r, 'Monthly Salary in AED'));
+    return {
+      entity: 'India', country: 'India', location: fixLocation(I.get(r, 'Location')),
+      dept: text(I.get(r, 'Dept.')), group: groupOf(I.get(r, 'Dept.')),
+      payroll: text(I.get(r, 'Payroll No.')), name: text(I.get(r, 'Employee Name')), title: text(I.get(r, 'Job Title')),
+      role: text(I.get(r, 'Role', 0)), deptRole: role2, grading: toNum(I.get(r, 'Grading')),
+      startRaw: I.get(r, 'Start Date'), start: toDate(I.get(r, 'Start Date')),
+      age: toNum(I.get(r, 'Age')), gender: gender(I.get(r, 'Gender')), nationality: 'Indian (India entity)',
+      exp: toNum(I.get(r, 'Total Years of Experience')), expGrad: toNum(I.get(r, 'Years of Experience from graduation')),
+      manager: text(I.get(r, 'Line Manager')),
+      salaryAed: sal, salaryAccess: toNum(I.get(r, 'Total Monthly Salary in AED')),
+      accessMargin: toNum(I.get(r, 'Access - Margin Cost')),
+      bim: isBimRole(role2),
+    };
+  });
+  PERMANENT = [...dubai, ...india];
+  deptRows = PERMANENT.some((p) => deptKey(p.dept) === 'site') && !PERMANENT.some((p) => /-site$/.test(deptKey(p.dept)))
+    ? EXCEL_DEPTS.flatMap((d) => (d === 'Structures-Site' ? ['Site'] : d === 'MEP-Site' ? [] : [d]))
+    : EXCEL_DEPTS;
+
+  // India "35% Access" margin as found in the data (Access margin ÷ monthly salary), used for leavers.
+  const ratios = india.filter((p) => p.salaryAed && p.accessMargin).map((p) => p.accessMargin / p.salaryAed).sort((a, b) => a - b);
+  ACCESS_RATIO = ratios.length ? ratios[Math.floor(ratios.length / 2)] : 0;
 
 
-// ---------- Leavers ----------
-const L = table('Resigned & Terminated');
-export const LEAVERS = L.rows.filter((r) => !isBlank(L.get(r, 'Employee Name'))).map((r) => {
-  const ent = text(L.get(r, 'Entity')).toLowerCase();
-  const entity = ent.startsWith('india') ? 'India' : 'Dubai';
-  const g = gender(L.get(r, 'Gender')) ?? gender(L.get(r, 'Nationality'));
-  const aligned = !!gender(L.get(r, 'Gender'));
-  const type = text(L.get(r, 'Resigned/Terminateed')).toLowerCase().startsWith('term') ? 'Termination' : 'Resignation';
-  const name = text(L.get(r, 'Employee Name'));
-  const reg = entity === 'Dubai' ? reductionByName[nameKey(name)] : null;
-  const s = toNum(L.get(r, 'Monthly Salary (AED)'));
-  return {
-    entity, country: entity === 'India' ? 'India' : 'UAE', location: text(L.get(r, 'Location')),
-    dept: text(L.get(r, 'Department')), group: groupOf(L.get(r, 'Department')), payroll: text(L.get(r, 'Payroll No.')),
-    name, title: text(L.get(r, 'Job Title')), start: toDate(L.get(r, 'Start Date')),
-    lwdRaw: L.get(r, 'Last Working Day'), lwd: toDate(L.get(r, 'Last Working Day')), type, gender: g,
-    rowAligned: aligned,
-    // Salary used for the monthly salary trend: register first, else the sheet's salary if plausible.
-    salaryPre: reg?.current ?? (s && s >= 1000 ? s : null),
-    salaryPost: reg?.reduced ?? (s && s >= 1000 ? s : null),
-    salaryAed: entity === 'India' && s && s > 0 ? s : null,
-  };
-});
+  // ---------- Leavers ----------
+  const L = table('Resigned & Terminated');
+  LEAVERS = L.rows.filter((r) => !isBlank(L.get(r, 'Employee Name'))).map((r) => {
+    const ent = text(L.get(r, 'Entity')).toLowerCase();
+    const entity = ent.startsWith('india') ? 'India' : 'Dubai';
+    const g = gender(L.get(r, 'Gender')) ?? gender(L.get(r, 'Nationality'));
+    const aligned = !!gender(L.get(r, 'Gender'));
+    const type = text(L.get(r, 'Resigned/Terminateed')).toLowerCase().startsWith('term') ? 'Termination' : 'Resignation';
+    const name = text(L.get(r, 'Employee Name'));
+    const reg = entity === 'Dubai' ? reductionByName[nameKey(name)] : null;
+    const s = toNum(L.get(r, 'Monthly Salary (AED)'));
+    return {
+      entity, country: entity === 'India' ? 'India' : 'UAE', location: text(L.get(r, 'Location')),
+      dept: text(L.get(r, 'Department')), group: groupOf(L.get(r, 'Department')), payroll: text(L.get(r, 'Payroll No.')),
+      name, title: text(L.get(r, 'Job Title')), start: toDate(L.get(r, 'Start Date')),
+      lwdRaw: L.get(r, 'Last Working Day'), lwd: toDate(L.get(r, 'Last Working Day')), type, gender: g,
+      rowAligned: aligned,
+      // Salary used for the monthly salary trend: register first, else the sheet's salary if plausible.
+      salaryPre: reg?.current ?? (s && s >= 1000 ? s : null),
+      salaryPost: reg?.reduced ?? (s && s >= 1000 ? s : null),
+      salaryAed: entity === 'India' && s && s > 0 ? s : null,
+    };
+  });
 
-// ---------- Temp staff ----------
-const T = table('Temp Staff');
-export const TEMPS = T.rows.filter((r) => !isBlank(T.get(r, 'Name'))).map((r) => {
-  const currency = text(T.get(r, 'Currency')).toUpperCase();
-  const amt = toNum(T.get(r, 'Cost (number)'));
-  let cost = toNum(T.get(r, 'Monthly Cost (AED)', 1));
-  if (cost === null && amt !== null) {
-    cost = currency === 'INR' ? amt / INR_PER_AED : currency === 'AED/HR' ? amt * HOURS
-      : currency === 'INR/HR' ? (amt * HOURS) / INR_PER_AED : amt;
+  // ---------- Temp staff ----------
+  // Works with either layout: the cleaned-up sheet (Currency / Cost (number) / Include? columns)
+  // or the plain sheet, where the cost is read from "Monthly Cost (AED)" as typed
+  // (e.g. 6500, "17,000 INR", "150/hr", "750 INR per hour") and the Comments column (INR / AED).
+  const T = table('Temp Staff');
+  const statusCol = T.col('Status');
+  const hasHelpers = T.col('Cost (number)') >= 0;
+  const parsed = T.rows.filter((r) => !isBlank(T.get(r, 'Name'))).map((r) => {
+    const loc = text(T.get(r, 'Location'));
+    const comments = text(T.get(r, 'Comments'));
+    const extra = statusCol >= 0 ? [r[statusCol + 1], r[statusCol + 2]].map(text).filter(Boolean) : [];
+    let currency; let amt; let cost = null;
+    if (hasHelpers) {
+      currency = text(T.get(r, 'Currency')).toUpperCase();
+      amt = toNum(T.get(r, 'Cost (number)'));
+      cost = toNum(T.get(r, 'Monthly Cost (AED)', 1));
+    } else {
+      const raw = T.get(r, 'Monthly Cost (AED)');
+      const s = text(raw).toLowerCase();
+      amt = typeof raw === 'number' ? raw : toNum(s.replace(/[^0-9.]/g, '') || null);
+      const hourly = /\/\s*hr|per\s*h(ou)?r|hourly/.test(s);
+      const inr = /inr/.test(s) || /^inr$/i.test(comments)
+        // No currency written: an India temp costing 50,000+ a month can only be rupees
+        // (the highest AED cost for an India temp is about 11,000).
+        || (!/aed/.test(s) && !/^aed$/i.test(comments) && /india/i.test(loc) && amt >= 50000 && !hourly);
+      currency = `${inr ? 'INR' : 'AED'}${hourly ? '/HR' : ''}`;
+    }
+    if (cost === null && amt !== null) {
+      cost = currency === 'INR' ? amt / INR_PER_AED : currency === 'AED/HR' ? amt * HOURS
+        : currency === 'INR/HR' ? (amt * HOURS) / INR_PER_AED : amt;
+    }
+    const status = text(T.get(r, 'Status'));
+    const include = text(T.get(r, 'Include? (Y/N)')).toUpperCase() !== 'N';
+    return {
+      contract: text(T.get(r, 'Contract')), location: loc,
+      country: /dubai/i.test(loc) ? 'UAE' : /india/i.test(loc) ? 'India' : /uk|london/i.test(loc) ? 'United Kingdom' : loc,
+      startRaw: T.get(r, 'Start Date'), start: toDate(T.get(r, 'Start Date')),
+      endRaw: T.get(r, 'End Date'), end: toDate(T.get(r, 'End Date')),
+      company: text(T.get(r, 'Company')), dept: text(T.get(r, 'Department')), group: groupOf(T.get(r, 'Department')),
+      name: text(T.get(r, 'Name')), title: text(T.get(r, 'Designation')), status, include,
+      cost: cost ?? 0, costMissing: cost === null || cost === 0,
+      currency, comments, note: text(T.get(r, 'Review note')) || extra.join(' · '), extra,
+      bim: /\bbim\b|model/i.test(text(T.get(r, 'Designation'))),
+    };
+  });
+  // "Replacement of <name>" on an active row: the person replaced is not counted as well.
+  const isActive = (t) => t.include && /^active$/i.test(t.status);
+  for (const t of parsed) {
+    if (!isActive(t)) continue;
+    for (const e of t.extra) {
+      const m = e.match(/replacement of\s+(.+)/i);
+      if (!m) continue;
+      const who = m[1].trim().toLowerCase();
+      const old = parsed.find((o) => o !== t && isActive(o) && o.name.toLowerCase().startsWith(who));
+      if (old) { old.include = false; old.note = `Replaced by ${t.name} – not counted`; }
+    }
   }
-  const loc = text(T.get(r, 'Location'));
-  const status = text(T.get(r, 'Status'));
-  const include = text(T.get(r, 'Include? (Y/N)')).toUpperCase() !== 'N';
-  return {
-    contract: text(T.get(r, 'Contract')), location: loc,
-    country: /dubai/i.test(loc) ? 'UAE' : /india/i.test(loc) ? 'India' : /uk|london/i.test(loc) ? 'United Kingdom' : loc,
-    startRaw: T.get(r, 'Start Date'), start: toDate(T.get(r, 'Start Date')),
-    endRaw: T.get(r, 'End Date'), end: toDate(T.get(r, 'End Date')),
-    company: text(T.get(r, 'Company')), dept: text(T.get(r, 'Department')), group: groupOf(T.get(r, 'Department')),
-    name: text(T.get(r, 'Name')), title: text(T.get(r, 'Designation')), status, include,
-    active: include && /^active$/i.test(status), cost: cost ?? 0, costMissing: cost === null || cost === 0,
-    currency, comments: text(T.get(r, 'Comments')), note: text(T.get(r, 'Review note')),
-    bim: /\bbim\b|model/i.test(text(T.get(r, 'Designation'))),
-  };
-});
+  TEMPS = parsed.map(({ extra: _extra, ...t }) => ({ ...t, active: isActive(t) }));
 
-// =====================================================================
-// Everything below is calculated for a chosen as-of date (default: the
-// "As-of date" in the Excel Checks sheet). Nothing after that date is shown.
-// =====================================================================
+  // =====================================================================
+  // Everything below is calculated for a chosen as-of date (default: the
+  // Excel's as-of date). Nothing after that date is shown.
+  // =====================================================================
+
+  leaverKnown = LEAVERS.filter((l) => l.lwd && l.start);
+  cache.clear();
+}
 
 const tempOnBoard = (t, at) => {
   if (!t.include) return false;
-  if (at >= AS_OF) return t.active; // at the Excel date, use the sheet's Status
+  if (at >= AS_OF) return t.active; // today: use the sheet's Status
   if (t.start && t.start > at) return false; // a start with no year/month counts as already on board
   if (t.active) return !t.end || t.end >= at;
   return !!t.end && t.end >= at && (!t.start || t.start <= at);
@@ -177,7 +245,6 @@ const tempOnBoard = (t, at) => {
 // Permanent staff on board on a date. From the Excel as-of date onwards the
 // Dubai/India staff lists are used as-is (people on the Resigned sheet are excluded,
 // as in the Excel). For earlier dates, leavers count until their last working day.
-const leaverKnown = LEAVERS.filter((l) => l.lwd && l.start);
 function permanentAt(at) {
   const roster = PERMANENT.filter((p) => p.start && p.start <= at);
   if (at >= AS_OF) return roster;
@@ -192,7 +259,19 @@ const salaryOf = (p, at, indiaBasis) => {
   return indiaBasis === 'access' ? p.salaryAed * (1 + ACCESS_RATIO) : p.salaryAed;
 };
 
-const sameDeptCost = (a, b) => text(a).toLowerCase() === text(b).toLowerCase();
+// Department names are written in different ways across sheets ("Infra" / "Infrastructure",
+// "Geotech" / "Geotechnical", "Buss. Support" / "Business Support"); compare them by one key.
+const deptKey = (d) => {
+  const t = text(d).toLowerCase().replace(/\s+/g, ' ');
+  if (t.startsWith('geo')) return 'geotech';
+  if (t.startsWith('infra')) return 'infrastructure';
+  if (t.startsWith('buss') || t.startsWith('business')) return 'business support';
+  return t;
+};
+export const sameDeptCost = (a, b) => deptKey(a) === deptKey(b);
+// The department rows used by the Overview and Cost tables. If the Excel lists Dubai site staff
+// simply as "Site" (rather than Structures-Site / MEP-Site), one "Site" row is shown instead.
+let deptRows = EXCEL_DEPTS;
 
 const cache = new Map();
 export function makeModel(asOf = AS_OF) {
@@ -311,7 +390,7 @@ export function makeModel(asOf = AS_OF) {
       joiningLaterDubai: joiningLater.filter((p) => p.entity === 'Dubai').length,
       joiningLaterIndia: joiningLater.filter((p) => p.entity === 'India').length,
       payroll: dubCost + indCost, dubCost, indCost, tempCost,
-      byDept: EXCEL_DEPTS.map((d) => ({ dept: d, Dubai: dub.filter((p) => sameDeptCost(p.dept, d)).length, India: ind.filter((p) => sameDeptCost(p.dept, d)).length })),
+      byDept: deptRows.map((d) => ({ dept: d, Dubai: dub.filter((p) => sameDeptCost(p.dept, d)).length, India: ind.filter((p) => sameDeptCost(p.dept, d)).length })),
       byLocation: [{ loc: 'Dubai (UAE)', n: dub.length }, ...[...locs, ...otherIndia].map((l) => ({ loc: l, n: ind.filter((p) => p.location === l).length }))],
       male: active.filter((p) => p.gender === 'Male').length, female: active.filter((p) => p.gender === 'Female').length,
       avgAge: ages.length ? ages.reduce((a, b) => a + b, 0) / ages.length : null,
@@ -323,9 +402,18 @@ export function makeModel(asOf = AS_OF) {
   function costProjection() {
     const c = cells('Cost Projection');
     const hdr = c.find((r) => text(r[1]) === 'Department') ?? [];
-    const pmonths = hdr.map(toDate).filter(Boolean);
+    let pmonths = hdr.map(toDate).filter(Boolean);
+    // If the sheet's title names a range (e.g. "— Jul to Dec 2026"), project just those months.
+    const title = c.flat().map(text).find((v) => /cost projection/i.test(v)) ?? '';
+    const rng = title.match(/\b([A-Za-z]{3})[a-z]*\s+to\s+([A-Za-z]{3})[a-z]*/);
+    const MON = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    if (rng) {
+      const a = MON.indexOf(rng[1].toLowerCase()); const b = MON.indexOf(rng[2].toLowerCase());
+      const keep = pmonths.filter((m) => m.getUTCMonth() >= a && m.getUTCMonth() <= b);
+      if (a >= 0 && b >= 0 && keep.length) pmonths = keep;
+    }
     const salary = (p) => (p.entity === 'Dubai' ? p.salaryPost : p.salaryAed) ?? 0;
-    const build = (entity) => EXCEL_DEPTS.map((d) => {
+    const build = (entity) => deptRows.map((d) => {
       const staff = PERMANENT.filter((p) => (!entity || p.entity === entity) && sameDeptCost(p.dept, d));
       const perm = staff.filter((p) => p.start && p.start <= asOf).reduce((s, p) => s + salary(p), 0);
       const temps = activeTemps.filter((t) => sameDeptCost(t.dept, d) && (!entity || t.location === entity));

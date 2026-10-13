@@ -4,7 +4,7 @@ title Update 9E Dashboard
 cd /d "%~dp0"
 echo.
 echo  ==========================================
-echo    9E Operations Board - update dashboard
+echo    HR Workforce Intelligence - update
 echo  ==========================================
 echo.
 
@@ -33,7 +33,11 @@ if not exist "excel-path.txt" (
   echo.
 )
 
+where git >nul 2>nul
+if not errorlevel 1 git pull -q 2>nul
+
 echo  Reading the Excel and encrypting the data...
+echo  (You will be asked for the dashboard password - the characters show as *)
 call npm run update-data --silent
 if errorlevel 1 goto failed
 

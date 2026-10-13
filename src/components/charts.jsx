@@ -2,6 +2,7 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LabelList,
 } from 'recharts';
 import { fmtInt, fmtCompact, Legend } from './ui.jsx';
+import { useSalary } from '../lib/auth.jsx';
 
 // Categorical colours (validated CVD-safe order) + brand neutrals.
 export const C = {
@@ -43,7 +44,9 @@ function MonthTip({ active, payload, label, fmt, detailKeys, totalKey }) {
 
 /** Stacked monthly columns with the total printed on top. Projected months are faded. */
 export function MonthlyStack({ data, series, totalKey = 'Total', detailKeys, money, height = 340 }) {
-  const fmt = money ? (v) => fmtInt(v) : (v) => fmtInt(v);
+  const fmt = (v) => fmtInt(v);
+  const { visible } = useSalary();
+  if (money && !visible) return <SalaryHidden height={height} />; // money charts never draw while hidden
   // The total label sits on the highest non-empty segment of each column.
   const topKey = (row) => [...series].reverse().find((s) => row[s.key])?.key;
   return (
@@ -91,6 +94,8 @@ function SimpleTip({ active, payload, label, fmt = fmtInt }) {
 /** Generic bar chart: grouped or stacked, vertical or horizontal. */
 export function Bars({ data, cat, series, stacked, horizontal, height = 300, labels = true, catWidth = 120, money, onBarClick }) {
   const vfmt = money ? fmtCompact : fmtInt;
+  const { visible } = useSalary();
+  if (money && !visible) return <SalaryHidden height={height} />; // money charts never draw while hidden
   const topKey = (row) => [...series].reverse().find((x) => row[x.key])?.key;
   return (
     <>
@@ -154,6 +159,15 @@ export function SplitBar({ label, parts, onPart }) {
           <span key={p.label}><i style={{ background: p.color }} />{p.label} {onPart ? <button className="num-link" onClick={() => onPart(p)}>{fmtInt(p.value)}</button> : <b>{fmtInt(p.value)}</b>} ({total ? Math.round((p.value / total) * 100) : 0}%)</span>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Shown instead of a pay chart while salaries are hidden (bar heights would give amounts away). */
+export function SalaryHidden({ height = 280 }) {
+  return (
+    <div className="salary-hidden" style={{ height }}>
+      <div><b>******</b><span>Salary figures are hidden. Switch on "Show salary" at the top of the page to see them.</span></div>
     </div>
   );
 }

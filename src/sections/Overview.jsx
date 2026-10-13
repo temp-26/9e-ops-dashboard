@@ -1,16 +1,18 @@
-import { REDUCTION_DATE, SETTINGS } from '../lib/model.js';
+import { REDUCTION_DATE, SETTINGS, sameDeptCost } from '../lib/model.js';
 import { fmtDate } from '../lib/data.js';
 import { Section, Card, Kpi, DataTable, fmtInt, fmtAed, fmtNum, fmtPct } from '../components/ui.jsx';
 import { SplitBar, Bars, C } from '../components/charts.jsx';
 import { useDrill, Num, asMixed } from '../components/drill.jsx';
+import { useSalary } from '../lib/auth.jsx';
 
 export default function Overview({ m }) {
   const s = m.summary();
   const open = useDrill();
+  const { money } = useSalary();
   const at = `As of ${fmtDate(m.asOf)}`;
   const dub = m.active.filter((p) => p.entity === 'Dubai');
   const ind = m.active.filter((p) => p.entity === 'India');
-  const sameD = (a, b) => a.trim().toLowerCase() === b.toLowerCase();
+  const sameD = sameDeptCost;
   const later = m.joiningLater;
   const tempsIn = (r) => m.activeTemps.filter((t) => r._total || sameD(t.dept, r.dept));
   const otherTempDepts = [...new Set(m.activeTemps.map((t) => t.dept.trim()))].filter((d) => !s.byDept.some((b) => sameD(d, b.dept)));
@@ -29,7 +31,7 @@ export default function Overview({ m }) {
         <Kpi label="Dubai (UAE)" value={fmtInt(s.dubai)} sub={`Permanent · +${s.joiningLaterDubai} future joiners`} onClick={() => open('Dubai (UAE) – permanent staff', dub, 'people', { eyebrow: at })} />
         <Kpi label="India" value={fmtInt(s.india)} sub={`Permanent · +${s.joiningLaterIndia} future joiners`} onClick={() => open('India – permanent staff', ind, 'people', { eyebrow: at })} />
         <Kpi label="Temp staff" value={fmtInt(s.temp)} sub="Active contract / temporary" onClick={() => open('Temp staff', m.activeTemps, 'temps', { eyebrow: at })} />
-        <Kpi label="Active payroll" value={fmtInt(s.payroll)} sub="AED / month · permanent" onClick={() => open('Active payroll', m.active.map((p) => ({ ...p, amount: p.entity === 'Dubai' ? m.salary(p, m.asOf, 'salary') : p.salaryAed })), 'salary', { eyebrow: at })} />
+        <Kpi label="Active payroll" value={money(s.payroll)} sub="AED / month · permanent" onClick={() => open('Active payroll', m.active.map((p) => ({ ...p, amount: p.entity === 'Dubai' ? m.salary(p, m.asOf, 'salary') : p.salaryAed })), 'salary', { eyebrow: at })} />
       </div>
       <div className="kpis">
         <Kpi accent label="Avg new joiners / month" value={fmtNum(m.avgJoiners.avg, 1)} sub={`${m.avgJoiners.count} joiners in ${m.avgJoiners.months} months of ${m.year}`} onClick={() => open(`New joiners in ${m.year}`, m.joinersYtd, 'people')} />
@@ -71,7 +73,7 @@ export default function Overview({ m }) {
           <div className="kpis three">
             <Kpi label="Average age (yrs)" value={fmtNum(s.avgAge, 1)} />
             <Kpi label="Avg total experience (yrs)" value={fmtNum(s.avgExp, 1)} />
-            <Kpi label="Avg monthly salary" value={fmtAed(s.avgSalary)} />
+            <Kpi label="Avg monthly salary" value={money(s.avgSalary, fmtAed)} />
           </div>
           <p className="muted small">INR converted at {SETTINGS.inrPerAed} per AED.</p>
         </Card>

@@ -5,22 +5,26 @@ import { Section, Card, Kpi, DataTable, ShowTable, Toggle, fmtInt, fmtNum, fmtCo
 import { Bars, C } from '../components/charts.jsx';
 import { DeptTrend } from '../components/trends.jsx';
 import { useDrill, Num, asMixed } from '../components/drill.jsx';
+import { useSalary, MASK } from '../lib/auth.jsx';
+import { SalaryHidden } from '../components/charts.jsx';
 
 const DEPT_LABEL = { STR: 'Structures', 'Buss. Support': 'Business Support', Infra: 'Infrastructure', PM: 'Project Management' };
 const SCOPES = [{ value: 'all', label: 'UAE & India' }, { value: 'UAE', label: 'UAE' }, { value: 'India', label: 'India' }];
 
 function MonthlyTable({ rows }) {
+  const { money } = useSalary();
   const keys = [...GROUPS, 'Total'].filter((k) => k === 'Total' || rows.some((r) => r[k]));
   const cols = [{ key: 'dept', label: 'Dept' }, ...rows.map((r, i) => ({ key: `m${i}`, label: r.label, num: true }))];
   const body = keys.map((k) => {
     const o = { dept: DEPT_LABEL[k] ?? k, _total: k === 'Total' };
-    rows.forEach((r, i) => { o[`m${i}`] = fmtInt(r[k]); });
+    rows.forEach((r, i) => { o[`m${i}`] = money(r[k]); });
     return o;
   });
   return <DataTable dense columns={cols} rows={body} />;
 }
 
 function WorkforceCost({ m }) {
+  const { money } = useSalary();
   const s = m.summary();
   const dub = m.active.filter((p) => p.entity === 'Dubai');
   const ind = m.active.filter((p) => p.entity === 'India');
@@ -28,7 +32,7 @@ function WorkforceCost({ m }) {
     <Card title="Monthly Workforce Cost" eyebrow={`AED · as of ${fmtDate(m.asOf)}`}>
       <DataTable columns={[
         { key: 'seg', label: 'Segment' }, { key: 'hc', label: 'Headcount', num: true, render: (r) => <Num rows={r.list} kind={r.kind} title={r.seg}>{fmtInt(r.hc)}</Num> },
-        { key: 'cost', label: 'Monthly Cost (AED)', num: true, render: (r) => fmtNum(r.cost, 2) },
+        { key: 'cost', label: 'Monthly Cost (AED)', num: true, render: (r) => money(r.cost, (v) => fmtNum(v, 2)) },
       ]} rows={[
         { seg: 'Dubai permanent', hc: s.dubai, cost: s.dubCost, list: dub.map((p) => ({ ...p, amount: m.salary(p, m.asOf, 'salary') })), kind: 'salary' },
         { seg: 'India permanent', hc: s.india, cost: s.indCost, list: ind.map((p) => ({ ...p, amount: p.salaryAed })), kind: 'salary' },
@@ -43,12 +47,13 @@ function WorkforceCost({ m }) {
 export default function Salaries({ m }) {
   const [basis, setBasis] = useState('access');
   const open = useDrill();
+  const { visible, money } = useSalary();
   const [scope, setScope] = useState('all');
   const uae = m.monthlySalaries('UAE', basis);
   const ind = m.monthlySalaries('India', basis);
   const rows = scope === 'UAE' ? uae : scope === 'India' ? ind : m.monthlySalaries('all', basis);
   const last = rows.length - 1;
-  const pctChange = (a, b) => (a ? `${b >= a ? '+' : '−'}${Math.abs(((b - a) / a) * 100).toFixed(1)}% vs ${rows[0].label}` : '');
+  const pctChange = (a, b) => (!visible ? MASK : a ? `${b >= a ? '+' : '−'}${Math.abs(((b - a) / a) * 100).toFixed(1)}% vs ${rows[0].label}` : '');
   const inScope = (c) => scope === 'all' || c === scope;
   const payList = (mo, filter = () => true, any = false) => m.peopleAt(mo.end).filter((p) => (any || inScope(p.country)) && filter(p))
     .map((p) => ({ ...p, amount: m.salary(p, mo.start, basis) })).sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));
@@ -65,9 +70,9 @@ export default function Salaries({ m }) {
       subtitle={`Monthly payroll of permanent staff, in AED · Dubai reflects the ${fmtDate(REDUCTION_DATE)} reduction · India in AED equivalent`}>
       <div className="row-between">
         <div className="kpis">
-          <Kpi onClick={() => open(`Salaries – UAE & India · ${lastMo.label}`, payList(lastMo, () => true, true), 'salary')} accent label={`Total · ${rows[last].label}`} value={`AED ${fmtCompact(uae[last].Total + ind[last].Total)}`} sub={pctChange(uae[0].Total + ind[0].Total, uae[last].Total + ind[last].Total)} />
-          <Kpi onClick={() => open(`Salaries – UAE · ${lastMo.label}`, payList(lastMo, (p) => p.country === 'UAE', true), 'salary')} label="UAE" value={`AED ${fmtCompact(uae[last].Total)}`} sub={pctChange(uae[0].Total, uae[last].Total)} />
-          <Kpi onClick={() => open(`Salaries – India · ${lastMo.label}`, payList(lastMo, (p) => p.country === 'India', true), 'salary')} label="India" value={`AED ${fmtCompact(ind[last].Total)}`} sub={pctChange(ind[0].Total, ind[last].Total)} />
+          <Kpi onClick={() => open(`Salaries – UAE & India · ${lastMo.label}`, payList(lastMo, () => true, true), 'salary')} accent label={`Total · ${rows[last].label}`} value={`AED ${money(uae[last].Total + ind[last].Total, fmtCompact)}`} sub={pctChange(uae[0].Total + ind[0].Total, uae[last].Total + ind[last].Total)} />
+          <Kpi onClick={() => open(`Salaries – UAE · ${lastMo.label}`, payList(lastMo, (p) => p.country === 'UAE', true), 'salary')} label="UAE" value={`AED ${money(uae[last].Total, fmtCompact)}`} sub={pctChange(uae[0].Total, uae[last].Total)} />
+          <Kpi onClick={() => open(`Salaries – India · ${lastMo.label}`, payList(lastMo, (p) => p.country === 'India', true), 'salary')} label="India" value={`AED ${money(ind[last].Total, fmtCompact)}`} sub={pctChange(ind[0].Total, ind[last].Total)} />
         </div>
         <div className="controls">
           <Toggle label="Entity" value={scope} onChange={setScope} options={SCOPES} />
@@ -80,13 +85,13 @@ export default function Salaries({ m }) {
       <WorkforceCost m={m} />
 
       <Card title={`Monthly salaries – ${scopeLabel}`} eyebrow={`AED · ${m.months[0].label} to ${fmtDate(m.asOf)}`}>
-        <Bars money data={chart} cat="name" stacked series={series} height={320}
-          onBarClick={(row, key) => { const mo = m.months.find((x) => x.label === row.name); if (mo) open(`Salaries – ${key} · ${mo.label}`, m.peopleAt(mo.end).filter((p) => p.country === key).map((p) => ({ ...p, amount: m.salary(p, mo.start, basis) })).sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0)), 'salary'); }} />
+        {!visible ? <SalaryHidden height={320} /> : <Bars money data={chart} cat="name" stacked series={series} height={320}
+          onBarClick={(row, key) => { const mo = m.months.find((x) => x.label === row.name); if (mo) open(`Salaries – ${key} · ${mo.label}`, m.peopleAt(mo.end).filter((p) => p.country === key).map((p) => ({ ...p, amount: m.salary(p, mo.start, basis) })).sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0)), 'salary'); }} />}
         <ShowTable><MonthlyTable rows={rows} /></ShowTable>
       </Card>
 
       <Card title={`Salaries by department – ${scopeLabel}`} eyebrow={`AED per month · change from ${rows[0].label} to ${rows[last].label}`}>
-        <DeptTrend neutral onRow={(g) => open(`Salaries – ${DEPT_LABEL[g] ?? g} · ${lastMo.label}`, payList(lastMo, (p) => p.group === g), 'salary', { eyebrow: scopeLabel })} rows={rows} keys={GROUPS} labels={DEPT_LABEL} fmt={fmtInt} firstLabel={rows[0].label} lastLabel={rows[last].label} />
+        <DeptTrend neutral masked={!visible} onRow={(g) => open(`Salaries – ${DEPT_LABEL[g] ?? g} · ${lastMo.label}`, payList(lastMo, (p) => p.group === g), 'salary', { eyebrow: scopeLabel })} rows={rows} keys={GROUPS} labels={DEPT_LABEL} fmt={fmtInt} firstLabel={rows[0].label} lastLabel={rows[last].label} />
       </Card>
     </Section>
   );

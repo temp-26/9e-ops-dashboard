@@ -1,13 +1,11 @@
-// Converts the workforce Excel file into src/data/data.json.
+// Converts the workforce Excel file into the dashboard's encrypted data file.
 //
 // Usage:
 //   npm run update-data                      -> uses the newest .xlsx in the data/ folder
 //   npm run update-data -- path/to/file.xlsx -> uses that file
 //
-// It asks for the dashboard password and saves the data ENCRYPTED to
-// src/data/data.enc.json (AES-256-GCM, key from PBKDF2-SHA256). Without the password
-// the file is unreadable, so it is safe to put on GitHub. The same password opens the
-// dashboard in the browser. To change the password, just run this again with a new one.
+// The data is saved ENCRYPTED in the public/ folder: data.enc.json, locked with the
+// dashboard password via key.json. See src/lib/vault.js.
 //
 // Every sheet, every row and every column is copied exactly as stored in Excel
 // (formulas are copied as their last calculated value). The only exception is the
@@ -19,12 +17,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import XLSX from 'xlsx';
 import readline from 'node:readline';
-import { webcrypto as wc } from 'node:crypto';
+import { makeKeyFile, newDataKey, passwordKey, sealJson, unlockDataKey } from '../src/lib/vault.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'src', 'data', 'data.enc.json');
 const PLAIN = path.join(ROOT, 'src', 'data', 'data.json');
-const ITERATIONS = 600000;
 
 // ---- Privacy setting -------------------------------------------------------
 // Column headers matching any of these patterns are NOT copied into data.json.
@@ -42,6 +39,18 @@ const EXCLUDE_COLUMNS = [
 function pickInputFile() {
   const arg = process.argv[2];
   if (arg) return path.resolve(process.cwd(), arg);
+  // excel-path.txt (made by "Update Dashboard.bat") points at the SharePoint file synced to this PC.
+  const linkFile = path.join(ROOT, 'excel-path.txt');
+  if (fs.existsSync(linkFile)) {
+    const p = fs.readFileSync(linkFile, 'utf8').trim().replace(/^"|"$/g, '');
+    if (p) {
+      if (!fs.existsSync(p)) {
+        console.error(`\n  Can't find the Excel file:\n  ${p}\n  Check that OneDrive is running and the file is synced, or delete excel-path.txt to choose again.\n`);
+        process.exit(1);
+      }
+      return p;
+    }
+  }
   const dir = path.join(ROOT, 'data');
   const files = fs.existsSync(dir)
     ? fs.readdirSync(dir).filter((f) => /\.xlsx$/i.test(f) && !f.startsWith('~$'))
@@ -114,6 +123,9 @@ for (const name of wb.SheetNames) {
 const data = {
   meta: {
     sourceFile: path.basename(file),
+    // When the Excel was last saved (used as its "as-of" date if it has no Checks sheet).
+    excelSaved: (wb.Props?.ModifiedDate instanceof Date && !Number.isNaN(+wb.Props.ModifiedDate)
+      ? wb.Props.ModifiedDate : fs.statSync(file).mtime).toISOString(),
     convertedAt: new Date().toISOString(),
     sheetOrder: wb.SheetNames,
     excludedColumns: excluded,
@@ -121,48 +133,71 @@ const data = {
   sheets,
 };
 
-async function getPassword() {
-  if (process.env.DASHBOARD_PASSWORD) return process.env.DASHBOARD_PASSWORD;
-  // One prompt session for all questions; typed characters are shown as *.
+// ---------------------------------------------------------------------------
+// Encrypt with the dashboard password. The first run sets the password; later runs
+// ask for it again so people already signed in keep working and can simply press
+// "Refresh data". Typing a different password offers to change it.
+// (For automation, the password can be given in the DASHBOARD_PASSWORD variable.)
+// ---------------------------------------------------------------------------
+function prompter() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY });
   let muted = false;
   rl._writeToOutput = (str) => { if (!muted || /^\r?\n$/.test(str)) rl.output.write(str); else if (str.length === 1) rl.output.write('*'); };
   const lines = rl[Symbol.asyncIterator]();
-  const ask = async (q) => {
-    muted = false; rl.output.write(q); muted = true;
+  const ask = async (q, hidden = false) => {
+    muted = false; rl.output.write(q); muted = hidden;
     const { value, done } = await lines.next();
     muted = false;
-    if (done) { console.log('\n  No password entered.'); process.exit(1); }
+    if (done) { console.log('\n  Cancelled.'); process.exit(1); }
     return value;
   };
-  try {
-    for (;;) {
-      const a = await ask('\n  Dashboard password: ');
-      if (a.length < 10) { console.log('\n  Use at least 10 characters (mix words, numbers and symbols).'); continue; }
-      const b = await ask('\n  Type it again:      ');
-      if (a === b) { console.log(''); return a; }
-      console.log('\n  The two passwords did not match. Try again.');
+  return { ask, close: () => rl.close() };
+}
+
+const PUB = path.join(ROOT, 'public');
+const KEYFILE = path.join(PUB, 'key.json');
+fs.mkdirSync(PUB, { recursive: true });
+let keyFile = fs.existsSync(KEYFILE) ? JSON.parse(fs.readFileSync(KEYFILE, 'utf8')) : null;
+let dataKey;
+const env = process.env.DASHBOARD_PASSWORD;
+const p = env ? null : prompter();
+try {
+  const choose = async (first) => {
+    let pw = first;
+    while (!pw) {
+      const a = await p.ask('\n  New dashboard password (min 10 characters): ', true);
+      if (a.length < 10) { console.log('\n  Too short. Use at least 10 characters.'); continue; }
+      const b = await p.ask('\n  Type it again: ', true);
+      if (a === b) pw = a; else console.log('\n  The two passwords did not match.');
     }
-  } finally { rl.close(); }
-}
+    dataKey = newDataKey();
+    keyFile = await makeKeyFile(pw, dataKey);
+    fs.writeFileSync(KEYFILE, JSON.stringify(keyFile, null, 1));
+    console.log('\n  New password set. Tell your colleagues; the old one stops working once this is published.');
+  };
+  if (keyFile) {
+    const pw = env ?? await p.ask('\n  Dashboard password: ', true);
+    try {
+      dataKey = await unlockDataKey(await passwordKey(pw, keyFile.salt, keyFile.iter), keyFile);
+    } catch {
+      if (env) { console.log('\n  DASHBOARD_PASSWORD is not the current dashboard password.\n'); process.exit(1); }
+      console.log('\n  That is not the current dashboard password.');
+      const yn = await p.ask('  Do you want to CHANGE the password to a new one? (Y/N): ');
+      if (!/^y/i.test(yn.trim())) { console.log('\n  Nothing changed. Run again and type the current password.\n'); process.exit(1); }
+      await choose(null);
+    }
+  } else {
+    console.log('\n  First time: choose the password people will type to open the dashboard.');
+    await choose(env);
+  }
+} finally { p?.close(); }
+console.log('');
 
-async function encrypt(obj, password) {
-  const enc = new TextEncoder();
-  const salt = wc.getRandomValues(new Uint8Array(16));
-  const iv = wc.getRandomValues(new Uint8Array(12));
-  const base = await wc.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
-  const key = await wc.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: ITERATIONS, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
-  const data = await wc.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(obj)));
-  const b64 = (u) => Buffer.from(u).toString('base64');
-  return { format: '9e-aes-gcm-v1', kdf: 'PBKDF2-SHA256', iter: ITERATIONS, salt: b64(salt), iv: b64(iv), data: b64(new Uint8Array(data)) };
-}
+fs.writeFileSync(path.join(PUB, 'data.enc.json'), JSON.stringify(await sealJson(dataKey, data)));
+// Remove files from older versions and any plain copy.
+for (const old of [OUT, PLAIN, path.join(PUB, 'access.json'), path.join(PUB, 'salary.enc.json')]) if (fs.existsSync(old)) fs.unlinkSync(old);
 
-const password = await getPassword();
-fs.mkdirSync(path.dirname(OUT), { recursive: true });
-fs.writeFileSync(OUT, JSON.stringify(await encrypt(data, password)));
-if (fs.existsSync(PLAIN)) fs.unlinkSync(PLAIN); // never leave an unencrypted copy in the project
-const kb = (fs.statSync(OUT).size / 1024).toFixed(0);
-console.log(`\n  Saved src/data/data.enc.json (${kb} KB, encrypted).`);
+console.log('  Saved the encrypted data to public\\data.enc.json');
 const ex = Object.entries(excluded);
 if (ex.length) console.log(`  Left out (privacy): ${ex.map(([s, h]) => `${s}: ${h.join(', ')}`).join(' | ')}`);
 if (missingCache) {

@@ -3,6 +3,9 @@ dist
 .DS_Store
 *.log
 # The Excel file stays on your computer only (it contains ID numbers).
-# Only src/data/data.json (with ID columns removed) goes to GitHub.
+# Only the encrypted public/data.enc.json (ID columns removed) goes to GitHub.
 data/*.xlsx
 data/~$*
+
+# Local link to the synced SharePoint Excel (stays on this PC)
+excel-path.txt

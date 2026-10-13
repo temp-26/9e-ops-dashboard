@@ -5,6 +5,7 @@ import { Section, Card, Kpi, DataTable, ShowTable, fmtInt, fmtNum, Toggle } from
 import { Bars, C } from '../components/charts.jsx';
 import { HeadcountBridge } from '../components/trends.jsx';
 import { useDrill, Num, asMixed } from '../components/drill.jsx';
+import { useSalary } from '../lib/auth.jsx';
 
 const DEPT_LABEL = { STR: 'Structures', 'Buss. Support': 'Business Support', Infra: 'Infrastructure', PM: 'Project Management' };
 const SCOPES = [{ value: 'all', label: 'UAE & India' }, { value: 'UAE', label: 'UAE' }, { value: 'India', label: 'India' }];
@@ -22,6 +23,7 @@ function MonthlyTable({ rows }) {
 
 export default function Headcount({ m }) {
   const open = useDrill();
+  const { money } = useSalary();
   const breakup = m.breakup();
   const tot = breakup.reduce((a, r) => ({ Fixed: a.Fixed + r.Fixed, Temp: a.Temp + r.Temp, Total: a.Total + r.Total }), { Fixed: 0, Temp: 0, Total: 0 });
   const countries = [...new Set([...m.active.map((p) => p.country), ...m.activeTemps.map((t) => t.country)])].map((c) => ({
@@ -89,7 +91,7 @@ export default function Headcount({ m }) {
           { key: 'name', label: 'Name' }, { key: 'group', label: 'Dept', render: (t) => DEPT_LABEL[t.group] ?? t.group }, { key: 'title', label: 'Designation' },
           { key: 'company', label: 'Company' }, { key: 'contract', label: 'Contract' }, { key: 'location', label: 'Location' },
           { key: 'start', label: 'Start', render: (t) => (t.start ? fmtDate(t.start) : String(t.startRaw ?? '—')) },
-          { key: 'cost', label: 'Monthly Cost (AED)', num: true, render: (t) => (t.costMissing ? '—' : fmtInt(t.cost)) },
+          { key: 'cost', label: 'Monthly Cost (AED)', num: true, render: (t) => money(t.cost, (v) => (t.costMissing ? '—' : fmtInt(v))) },
         ]} rows={tempList} />
       </Card>
     </Section>

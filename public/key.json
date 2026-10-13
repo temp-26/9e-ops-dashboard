@@ -1,0 +1,11 @@
+{
+ "format": "9e-key-v3",
+ "kdf": "PBKDF2-SHA256",
+ "iter": 600000,
+ "salt": "fpFpgk7s7nrHblUsSm1yDw==",
+ "key": {
+  "iv": "x4K0sZLcx47spHC+",
+  "data": "iZ3/Fr1aZgd9OT0OFnSXKmoWrjWwUpopr/JlgyG5O+0RAcHnaUFrAc8pWb6Drp56"
+ },
+ "updatedAt": "2026-10-13T04:53:10.560Z"
+}

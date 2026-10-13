@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { fmtDate } from '../lib/data.js';
 import { DetailTable, Pill, fmtInt, tenure } from './ui.jsx';
+import { useSalary, MASK } from '../lib/auth.jsx';
 
 // ---- Click-through lists ("who are these people?") ------------------------
 const DrillCtx = createContext(() => {});
@@ -29,7 +30,7 @@ const COLS = {
     { key: 'name', label: 'Name' }, { key: 'location', label: 'Location' }, { key: 'dept', label: 'Department' },
     { key: 'title', label: 'Designation' }, { key: 'company', label: 'Company' }, { key: 'contract', label: 'Contract' },
     { key: 'start', label: 'Start', render: startCell, text: startCell },
-    { key: 'cost', label: 'Monthly Cost (AED)', num: true, render: (t) => (t.costMissing ? '—' : fmtInt(t.cost)) },
+    { key: 'cost', label: 'Monthly Cost (AED)', num: true, money: true, render: (t) => (t.costMissing ? '—' : fmtInt(t.cost)) },
   ],
   mixed: [
     { key: 'kind', label: 'Type', render: (p) => <Pill tone={p.kind === 'Temp' ? 'muted' : 'good'}>{p.kind}</Pill>, text: (p) => p.kind },
@@ -39,7 +40,7 @@ const COLS = {
   salary: [
     { key: 'payroll', label: 'Payroll No.' }, { key: 'name', label: 'Employee Name' }, { key: 'entity', label: 'Entity' },
     { key: 'dept', label: 'Department' }, { key: 'title', label: 'Job Title' },
-    { key: 'amount', label: 'Monthly Salary (AED)', num: true, render: (p) => (p.amount === null || p.amount === undefined ? '—' : fmtInt(p.amount)) },
+    { key: 'amount', label: 'Monthly Salary (AED)', num: true, money: true, render: (p) => (p.amount === null || p.amount === undefined ? '—' : fmtInt(p.amount)) },
   ],
 };
 
@@ -56,6 +57,8 @@ const PROFILE = [
 ];
 
 function Profile({ p, onBack }) {
+  const { visible } = useSalary();
+  const pay = (v) => (visible ? v : MASK);
   const rows = PROFILE.filter(([, k]) => p[k] !== undefined && p[k] !== null && p[k] !== '');
   return (
     <div className="profile">
@@ -68,14 +71,15 @@ function Profile({ p, onBack }) {
         <div><dt>Start date</dt><dd>{startCell(p)}</dd></div>
         {p.lwd !== undefined && <div><dt>Last working day</dt><dd>{p.lwd ? fmtDate(p.lwd) : String(p.lwdRaw ?? '—')}</dd></div>}
         {p.type && <div><dt>Leaving type</dt><dd>{p.type}</dd></div>}
-        {p.amount !== undefined && <div><dt>Monthly salary (AED)</dt><dd>{p.amount === null ? '—' : fmtInt(p.amount)}</dd></div>}
-        {p.cost !== undefined && p.kind !== 'FTE' && p.entity !== 'Dubai' && p.entity !== 'India' && <div><dt>Monthly cost (AED)</dt><dd>{p.costMissing ? '—' : fmtInt(p.cost)}</dd></div>}
+        {p.amount !== undefined && <div><dt>Monthly salary (AED)</dt><dd>{pay(p.amount === null ? '—' : fmtInt(p.amount))}</dd></div>}
+        {p.cost !== undefined && p.kind !== 'FTE' && p.entity !== 'Dubai' && p.entity !== 'India' && <div><dt>Monthly cost (AED)</dt><dd>{pay(p.costMissing ? '—' : fmtInt(p.cost))}</dd></div>}
       </dl>
     </div>
   );
 }
 
 function Drawer({ view, onClose }) {
+  const { visible } = useSalary();
   const [person, setPerson] = useState(null);
   useEffect(() => {
     const k = (e) => { if (e.key === 'Escape') onClose(); };
@@ -83,7 +87,7 @@ function Drawer({ view, onClose }) {
     return () => window.removeEventListener('keydown', k);
   }, [onClose]);
   if (!view) return null;
-  const cols = (COLS[view.kind] ?? COLS.people).map((c, i) => (i === 1 || (view.kind === 'temps' && i === 0)
+  const cols = (COLS[view.kind] ?? COLS.people).map((c) => (c.money && !visible ? { ...c, render: () => MASK, text: () => MASK } : c)).map((c, i) => (i === 1 || (view.kind === 'temps' && i === 0)
     ? { ...c, render: (r) => <button className="name-link" onClick={() => setPerson(r)}>{r.name}</button>, text: (r) => r.name }
     : c));
   return (

@@ -25,7 +25,8 @@ export function Sparkline({ values, width = 150, height = 34 }) {
  * Department list: name · trend · first month · latest · change, with a bar
  * showing each department's size relative to the largest.
  */
-export function DeptTrend({ rows, keys, labels = {}, fmt, firstLabel, lastLabel, totalKey = 'Total', neutral = false, onRow }) {
+export function DeptTrend({ rows, keys, labels = {}, fmt, firstLabel, lastLabel, totalKey = 'Total', neutral = false, onRow, masked = false }) {
+  if (masked) fmt = () => '******';
   const items = keys.map((k) => {
     const vals = rows.map((r) => r[k] || 0);
     return { k, vals, first: vals[0], last: vals[vals.length - 1] };
@@ -39,7 +40,7 @@ export function DeptTrend({ rows, keys, labels = {}, fmt, firstLabel, lastLabel,
     const cls = neutral ? 'flat-ink' : d > 0 ? 'up' : d < 0 ? 'down' : 'flat';
     return (
       <span className={`chg ${cls}`}>
-        {d > 0 ? '▲' : d < 0 ? '▼' : '–'} {fmt(Math.abs(d))}{pct !== null && d !== 0 ? <small> ({Math.round(Math.abs(pct) * 100)}%)</small> : null}
+        {masked ? '******' : <>{d > 0 ? '▲' : d < 0 ? '▼' : '–'} {fmt(Math.abs(d))}{pct !== null && d !== 0 ? <small> ({Math.round(Math.abs(pct) * 100)}%)</small> : null}</>}
       </span>
     );
   };
@@ -56,10 +57,10 @@ export function DeptTrend({ rows, keys, labels = {}, fmt, firstLabel, lastLabel,
           {items.map((i) => (
             <tr key={i.k}>
               <td className="dept-cell">{onRow ? <button className="name-link" onClick={() => onRow(i.k)}>{labels[i.k] ?? i.k}</button> : (labels[i.k] ?? i.k)}</td>
-              <td className="spark-cell"><Sparkline values={i.vals} /></td>
+              <td className="spark-cell">{masked ? <span className="muted">hidden</span> : <Sparkline values={i.vals} />}</td>
               <td className="num muted">{fmt(i.first)}</td>
               <td className="num now-cell">
-                <span className="now-bar" style={{ width: `${(i.last / max) * 100}%` }} />
+                {!masked && <span className="now-bar" style={{ width: `${(i.last / max) * 100}%` }} />}
                 <b>{fmt(i.last)}</b>
               </td>
               <td className="num">{change(i)}</td>
@@ -67,7 +68,7 @@ export function DeptTrend({ rows, keys, labels = {}, fmt, firstLabel, lastLabel,
           ))}
           <tr className="total">
             <td>Total</td>
-            <td className="spark-cell"><Sparkline values={total.vals} /></td>
+            <td className="spark-cell">{masked ? <span className="muted">hidden</span> : <Sparkline values={total.vals} />}</td>
             <td className="num">{fmt(total.first)}</td>
             <td className="num">{fmt(total.last)}</td>
             <td className="num">{change(total)}</td>

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { EXCEL_AS_OF, makeModel } from './lib/model.js';
+import { EXCEL_AS_OF, makeModel, todayDate } from './lib/model.js';
 import { META, fmtDate } from './lib/data.js';
 import logo from './assets/9e-logo.png';
 import { DrillProvider } from './components/drill.jsx';
 import { lock } from './lib/session.js';
+import { useAuth } from './lib/auth.jsx';
 import Overview from './sections/Overview.jsx';
 import Headcount from './sections/Headcount.jsx';
 import Joiners from './sections/Joiners.jsx';
@@ -26,31 +27,55 @@ const TABS = [
   { id: 'org', label: 'Org Chart', C: OrgChart },
 ];
 
-const fromHash = () => {
-  const h = window.location.hash.replace('#', '');
-  return TABS.some((t) => t.id === h) ? h : 'overview';
-};
 const iso = (d) => d.toISOString().slice(0, 10);
-// Today's date on the viewer's computer — the dashboard always opens "as of today".
-const now = new Date();
-const TODAY = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-const MAX_DATE = TODAY > EXCEL_AS_OF ? TODAY : EXCEL_AS_OF;
-const minDate = `${EXCEL_AS_OF.getUTCFullYear()}-01-01`;
+const time = (d) => (d ? `${fmtDate(d)} ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '—');
 
 export default function App() {
+  const auth = useAuth();
+  const tabs = TABS;
+  const fromHash = () => {
+    const h = window.location.hash.replace('#', '');
+    return tabs.some((t) => t.id === h) ? h : 'overview';
+  };
   const [tab, setTab] = useState(fromHash);
-  const [asOfStr, setAsOfStr] = useState(iso(MAX_DATE));
   useEffect(() => {
     const on = () => setTab(fromHash());
     window.addEventListener('hashchange', on);
     return () => window.removeEventListener('hashchange', on);
-  }, []);
+  });
 
-  const parsed = new Date(`${asOfStr}T00:00:00Z`);
-  const asOf = Number.isNaN(parsed.getTime()) ? EXCEL_AS_OF : new Date(Math.min(Math.max(parsed, new Date(`${minDate}T00:00:00Z`)), MAX_DATE));
+  // The dashboard always shows TODAY (the viewer's computer date) unless a date is picked.
+  // If the page stays open past midnight it moves on to the new day by itself.
+  const TODAY = EXCEL_AS_OF; // = today, set when the data was (re)loaded
+  const minDate = `${TODAY.getUTCFullYear()}-01-01`;
+  const [picked, setPicked] = useState(null); // null = follow today
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState('');
+  const { newDay } = auth;
+  useEffect(() => {
+    const id = setInterval(() => { if (todayDate().getTime() !== EXCEL_AS_OF.getTime()) newDay(); }, 60000);
+    return () => clearInterval(id);
+  }, [newDay]);
+
+  const pick = (v) => {
+    const d = new Date(`${v}T00:00:00Z`);
+    if (Number.isNaN(d.getTime())) return;
+    setPicked(d.getTime() >= TODAY.getTime() ? null : v);
+  };
+  const parsed = picked ? new Date(`${picked}T00:00:00Z`) : TODAY;
+  const asOf = new Date(Math.min(Math.max(parsed, new Date(`${minDate}T00:00:00Z`)), TODAY));
   const m = makeModel(asOf);
-  const Active = TABS.find((t) => t.id === tab).C;
-  const isLatest = asOf.getTime() === MAX_DATE.getTime();
+  const current = tabs.find((t) => t.id === tab) ?? tabs[0];
+  const Active = current.C;
+  const isLatest = asOf.getTime() === TODAY.getTime();
+
+  const doRefresh = async () => {
+    setRefreshing(true); setRefreshMsg('');
+    const r = await auth.refresh();
+    setRefreshing(false);
+    setRefreshMsg(r?.ok ? 'Updated' : `Couldn't refresh: ${r?.message ?? 'try again'}`);
+    setTimeout(() => setRefreshMsg(''), 4000);
+  };
 
   return (
     <DrillProvider>
@@ -64,18 +89,29 @@ export default function App() {
               <h1>HR Workforce Intelligence</h1>
             </div>
           </div>
-          <div className="asof">
-            <label htmlFor="asof">As of date</label>
-            <div className="asof-row">
-              <input id="asof" type="date" value={iso(asOf)} min={minDate} max={iso(MAX_DATE)} onChange={(e) => e.target.value && setAsOfStr(e.target.value)} />
-              {!isLatest && <button className="link" onClick={() => setAsOfStr(iso(MAX_DATE))}>Today</button>}
-              <button className="lock-btn" onClick={lock} title="Lock the dashboard">Lock</button>
+          <div className="header-tools">
+            <div className="refresh">
+              <button className="tool-btn" onClick={doRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : '↻ Refresh data'}</button>
+              <span className="muted small-inline">{refreshMsg || <>Last refreshed: <b>{time(auth.lastRefreshed)}</b></>}</span>
             </div>
+            <label className={`salary-switch${auth.showSalary ? ' on' : ''}`} title="Salaries and costs are hidden (******) until you switch this on">
+              <input type="checkbox" checked={auth.showSalary} onChange={(e) => auth.setShowSalary(e.target.checked)} />
+              <span className="knob" aria-hidden="true" />
+              <span>Show salary</span>
+            </label>
+            <div className="asof">
+              <label htmlFor="asof">As of date</label>
+              <div className="asof-row">
+                <input id="asof" type="date" value={iso(asOf)} min={minDate} max={iso(TODAY)} onChange={(e) => e.target.value && pick(e.target.value)} />
+                {!isLatest && <button className="link" onClick={() => setPicked(null)}>Today</button>}
+              </div>
+            </div>
+            <button className="lock-btn" onClick={lock} title="Sign out and lock the dashboard">Lock</button>
           </div>
         </div>
         <nav className="tabs" aria-label="Sections">
-          {TABS.map((t) => (
-            <a key={t.id} href={`#${t.id}`} className={t.id === tab ? 'on' : ''} aria-current={t.id === tab ? 'page' : undefined}>{t.label}</a>
+          {tabs.map((t) => (
+            <a key={t.id} href={`#${t.id}`} className={t.id === current.id ? 'on' : ''} aria-current={t.id === current.id ? 'page' : undefined}>{t.label}</a>
           ))}
         </nav>
       </header>
@@ -83,7 +119,7 @@ export default function App() {
       <footer className="foot">
         <div className="foot-inner">
           <span><b>9E Global</b> &nbsp;|&nbsp; Engineering a Better World</span>
-          <span>Data: {META.sourceFile} (Excel dated {fmtDate(EXCEL_AS_OF)}) · showing {fmtDate(asOf)}</span>
+          <span>Data: {META.sourceFile} · last updated {time(META.convertedAt ? new Date(META.convertedAt) : null)} · showing {fmtDate(asOf)}{isLatest ? ' (today)' : ''}</span>
         </div>
       </footer>
     </div>

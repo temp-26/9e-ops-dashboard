@@ -1,11 +1,12 @@
 // Low-level helpers for reading the workforce data (a faithful copy of the Excel file,
 // decrypted in the browser after the password is entered).
-import { getRaw } from './store.js';
-
-const raw = getRaw();
-
-export const META = raw.meta;
-export const SHEETS = raw.sheets;
+// META and SHEETS are live bindings: loadRaw() swaps in new data (e.g. on "Refresh data").
+export let META = { sourceFile: '', sheetOrder: [], excludedColumns: {} };
+export let SHEETS = {};
+export function loadRaw(raw) {
+  META = raw.meta;
+  SHEETS = raw.sheets;
+}
 
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -13,9 +14,17 @@ export function isBlank(v) {
   return v === null || v === undefined || (typeof v === 'string' && v.replace(/ /g, '').trim() === '');
 }
 
+/** Finds a sheet by name, ignoring capitals and extra spaces ("Cost projection" = "Cost Projection"). */
+function sheetOf(sheet) {
+  if (SHEETS[sheet]) return SHEETS[sheet];
+  const k = Object.keys(SHEETS).find((n) => norm(n) === norm(sheet));
+  return k ? SHEETS[k] : null;
+}
+export const hasSheet = (sheet) => !!sheetOf(sheet);
+
 export function cells(sheet) {
-  const s = SHEETS[sheet];
-  if (!s) throw new Error(`Sheet "${sheet}" not found in data.json`);
+  const s = sheetOf(sheet);
+  if (!s) throw new Error(`Sheet "${sheet}" not found in the Excel data`);
   return s.cells;
 }
 
