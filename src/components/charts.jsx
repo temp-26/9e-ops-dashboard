@@ -1,10 +1,13 @@
 import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LabelList, Cell,
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LabelList, ReferenceArea,
 } from 'recharts';
 import { fmtInt, fmtCompact, Legend } from './ui.jsx';
 import { useSalary } from '../lib/auth.jsx';
 
 // Categorical colours (validated CVD-safe order) + brand neutrals.
+// Softer palette used on the Salaries tab (blue / teal family + warm amber for temps).
+export const SAL = { uae: '#2F5D8A', india: '#3E9C9A', access: '#A7D8D2', temp: '#E2A44B', other: '#B9B4AA' };
+
 export const C = {
   s1: '#2a78d6', s2: '#eb6834', s3: '#1baf7a', s4: '#eda100', s5: '#e87ba4', s6: '#008300', s7: '#4a3aa7',
   red: '#D6242F', ink: '#111111', ink2: '#3A3A3A', grey: '#7E7E7E', grey4: '#BFBFBF', grid: '#E8E8E8',
@@ -93,12 +96,11 @@ function SimpleTip({ active, payload, label, fmt = fmtInt }) {
 }
 
 /** Generic bar chart: grouped or stacked, vertical or horizontal. */
-export function Bars({ data, cat, series, stacked, horizontal, height = 300, labels = true, catWidth = 120, money, onBarClick }) {
+export function Bars({ data, cat, series, stacked, horizontal, height = 300, labels = true, catWidth = 120, money, onBarClick, highlight }) {
   const vfmt = money ? fmtCompact : fmtInt;
   const { visible } = useSalary();
   if (money && !visible) return <SalaryHidden height={height} />; // money charts never draw while hidden
   const topKey = (row) => [...series].reverse().find((x) => row[x.key])?.key;
-  const hasProjected = data.some((d) => d.projected);
   return (
     <>
       <div className="chart" style={{ height }}>
@@ -116,13 +118,19 @@ export function Bars({ data, cat, series, stacked, horizontal, height = 300, lab
                 <YAxis {...axisProps} width={money ? 52 : 32} allowDecimals={false} tickFormatter={money ? fmtCompact : undefined} />
               </>
             )}
+            {highlight && !horizontal && <ReferenceArea x1={highlight} x2={highlight} fill="#FBE3E4" fillOpacity={0.8} ifOverflow="extendDomain"
+              label={{ value: 'Current month', position: 'insideTop', fill: C.red, fontSize: 10, fontWeight: 600 }} />}
             <Tooltip cursor={{ fill: 'rgba(17,17,17,0.04)' }} content={<SimpleTip />} />
             {series.map((s) => (
               <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} stackId={stacked ? 'a' : undefined}
                 onClick={onBarClick ? (entry, idx) => onBarClick(data[idx] ?? entry?.payload, s.key) : undefined}
                 style={onBarClick ? { cursor: 'pointer' } : undefined}
                 stroke="#fff" strokeWidth={stacked ? 1 : 0} radius={stacked ? 0 : horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]} isAnimationActive={false}>
-                {hasProjected && data.map((d, i) => <Cell key={i} fillOpacity={d.projected ? 0.38 : 1} />)}
+                {s.inside && (
+                  <LabelList dataKey={s.key} position="center" content={(p) => (p.value && p.height >= 14
+                    ? <text x={p.x + p.width / 2} y={p.y + p.height / 2 + 4} textAnchor="middle" fontSize={10.5} fontWeight={600} fill={s.insideColor ?? '#fff'}>{vfmt(p.value)}</text>
+                    : null)} />
+                )}
                 {labels && (
                   <LabelList dataKey={cat} position={horizontal ? 'right' : 'top'} content={(p) => {
                     const row = data.find((d) => d[cat] === p.value) ?? data[p.index];
@@ -141,7 +149,7 @@ export function Bars({ data, cat, series, stacked, horizontal, height = 300, lab
         </ResponsiveContainer>
       </div>
       {series.length > 1 && <Legend items={series.map((s) => ({ label: s.label, color: s.color }))} />}
-      {(onBarClick || hasProjected) && <p className="hint">{[hasProjected && 'Lighter bars are projected months.', onBarClick && 'Click a bar to see the people.'].filter(Boolean).join(' ')}</p>}
+      {onBarClick && <p className="hint">Click a bar to see the people.</p>}
     </>
   );
 }

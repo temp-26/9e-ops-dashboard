@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { REDUCTION_DATE, sameDeptCost } from '../lib/model.js';
 import { fmtDate } from '../lib/data.js';
 import { Card, Kpi, DataTable, Toggle, fmtNum } from '../components/ui.jsx';
-import { Bars, C } from '../components/charts.jsx';
+import { Bars, SAL } from '../components/charts.jsx';
 import { useDrill, asMixed } from '../components/drill.jsx';
 import { useSalary } from '../lib/auth.jsx';
 
@@ -45,12 +45,6 @@ export default function CostProjection({ m, basis }) {
       <div className="section-head sub">
         <div className="eyebrow">{`${first.label.slice(0, 3)} to ${last.label} · AED`}</div>
         <h2>Cost Projection</h2>
-        <p className="muted">
-          Departmental cost by entity and combined, permanent staff + temp staff.
-          Months up to {fmtDate(m.asOf)} use the staff lists as they stood; months marked * are projected
-          (today's staff, future joiners from their start date, temp staff held flat).
-          Dubai reflects the {fmtDate(REDUCTION_DATE)} reduction · India {basis === 'access' ? 'incl. 35% Access' : 'salary only'}, in AED.
-        </p>
       </div>
       <div className="kpis">
         <Kpi accent label={`Combined total Jan–Dec ${m.year}`} value={`AED ${money(totals[2].total)}`} />
@@ -60,8 +54,8 @@ export default function CostProjection({ m, basis }) {
       </div>
       <Card title="Projected monthly cost" eyebrow={`AED · stacked by entity · ${first.label} to ${last.label}`}>
         <Bars data={chart} cat="name" stacked money height={300} series={[
-          { key: 'Dubai', label: 'Dubai (UAE)', color: C.red }, { key: 'India', label: 'India', color: C.ink2 },
-          ...(hasOther ? [{ key: 'Other', label: 'Other-location temp (UK)', color: C.grey4 }] : []),
+          { key: 'Dubai', label: 'Dubai (UAE)', color: SAL.uae }, { key: 'India', label: 'India', color: SAL.india },
+          ...(hasOther ? [{ key: 'Other', label: 'Other-location temp (UK)', color: SAL.other }] : []),
         ]} />
       </Card>
       <Card title={s.title} aside={<Toggle label="Entity" value={sec} onChange={setSec} options={cp.sections.map((x, i) => ({ value: i, label: x.title.split(' (')[0] }))} />}>

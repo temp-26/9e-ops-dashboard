@@ -341,6 +341,12 @@ export function makeModel(asOf = AS_OF) {
     });
   }
 
+  // Temp staff cost per month, Jan..Dec (later months: today's temps held flat).
+  function monthlyTempCost(scope = 'all') {
+    const ok = (t) => scope === 'all' || t.country === scope;
+    return yearMonths.map((mo) => { const l = tempsIn(mo).filter(ok); return { label: mo.label, cost: l.reduce((s, t) => s + t.cost, 0), list: l }; });
+  }
+
   // Monthly payroll of permanent staff. full = true gives Jan..Dec (later months projected).
   function monthlySalaries(scope = 'all', indiaBasis = 'salary', full = false) {
     const inScope = (c) => scope === 'all' || c === scope;
@@ -466,7 +472,7 @@ export function makeModel(asOf = AS_OF) {
     salary: (p, d, basis) => salaryOf(p, d, basis), active, activeTemps, joinersYtd, joiningLater, leaversYtd, servingNotice,
     leaversUndated, leaversEarlier, flow,
     avgJoiners: { count: joinersYtd.length, months: monthsElapsed, avg: monthsElapsed ? joinersYtd.length / monthsElapsed : 0 },
-    monthlyHeadcount, monthlySalaries, breakup, engVsBim, summary, costProjection,
+    monthlyHeadcount, monthlySalaries, monthlyTempCost, breakup, engVsBim, summary, costProjection,
   };
   cache.set(key, model);
   return model;
