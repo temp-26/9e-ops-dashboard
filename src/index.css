@@ -236,3 +236,4 @@ button.org-person:hover { background: var(--red-tint); }
 .salary-hidden span { font-size: 13px; }
 @media (max-width: 640px) { .header-tools { justify-content: flex-start; } .refresh { align-items: flex-start; } }
 @media print { .header-tools .tool-btn, .header-tools .lock-btn, .salary-switch .knob { display: none; } }
+.data-table tr.sub-row td, table tr.sub-row td { font-weight: 600; border-top: 1px solid var(--outline); background: var(--panel); }

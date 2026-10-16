@@ -288,6 +288,19 @@ export function makeModel(asOf = AS_OF) {
 
   const active = permanentAt(asOf);
   const activeTemps = TEMPS.filter((t) => tempOnBoard(t, asOf));
+
+  // The whole calendar year, Jan .. Dec. Months up to the as-of date use the data as it stood
+  // (the as-of month is shown "to date"); later months are PROJECTED: today's staff, plus
+  // future joiners from their start date, with today's temp staff held flat.
+  const yearMonths = Array.from({ length: 12 }, (_, m) => {
+    const start = monthStart(year, m);
+    const end = m === lastM ? asOf : monthEnd(year, m);
+    return { m, start, end, label: monthLabel(start), partial: m === lastM && asOf < monthEnd(year, m), projected: m > lastM };
+  });
+  const staffIn = (mo) => (mo.projected
+    ? [...active, ...PERMANENT.filter((p) => p.start && p.start > asOf && p.start <= mo.end)]
+    : permanentAt(mo.end));
+  const tempsIn = (mo) => (mo.projected ? activeTemps : TEMPS.filter((t) => tempOnBoard(t, mo.end)));
   const yearStart = monthStart(year, 0);
 
   // --- joiners & leavers ---
@@ -328,12 +341,13 @@ export function makeModel(asOf = AS_OF) {
     });
   }
 
-  function monthlySalaries(scope = 'all', indiaBasis = 'access') {
+  // Monthly payroll of permanent staff. full = true gives Jan..Dec (later months projected).
+  function monthlySalaries(scope = 'all', indiaBasis = 'salary', full = false) {
     const inScope = (c) => scope === 'all' || c === scope;
-    return months.map((mo) => {
-      const row = { label: mo.label, partial: mo.partial, missing: 0 };
+    return (full ? yearMonths : months).map((mo) => {
+      const row = { label: mo.label, partial: mo.partial, projected: !!mo.projected, missing: 0 };
       GROUPS.forEach((g) => { row[g] = 0; });
-      permanentAt(mo.end).forEach((p) => {
+      staffIn(mo).forEach((p) => {
         if (!inScope(p.country)) return;
         const v = salaryOf(p, mo.start, indiaBasis);
         if (v === null || v === undefined) row.missing += 1;
@@ -399,42 +413,36 @@ export function makeModel(asOf = AS_OF) {
     };
   }
 
-  function costProjection() {
-    const c = cells('Cost Projection');
-    const hdr = c.find((r) => text(r[1]) === 'Department') ?? [];
-    let pmonths = hdr.map(toDate).filter(Boolean);
-    // If the sheet's title names a range (e.g. "— Jul to Dec 2026"), project just those months.
-    const title = c.flat().map(text).find((v) => /cost projection/i.test(v)) ?? '';
-    const rng = title.match(/\b([A-Za-z]{3})[a-z]*\s+to\s+([A-Za-z]{3})[a-z]*/);
-    const MON = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-    if (rng) {
-      const a = MON.indexOf(rng[1].toLowerCase()); const b = MON.indexOf(rng[2].toLowerCase());
-      const keep = pmonths.filter((m) => m.getUTCMonth() >= a && m.getUTCMonth() <= b);
-      if (a >= 0 && b >= 0 && keep.length) pmonths = keep;
-    }
-    const salary = (p) => (p.entity === 'Dubai' ? p.salaryPost : p.salaryAed) ?? 0;
+  // Departmental cost, Jan..Dec: permanent salaries + temp staff, by entity and combined.
+  // Months up to today are from the data; later months are projected (see yearMonths).
+  function costProjection(indiaBasis = 'salary') {
+    const pay = (p, at) => salaryOf(p, at, indiaBasis) ?? 0;
+    const tempEnt = (t, entity) => !entity || (entity === 'Dubai' ? t.country === 'UAE' : t.country === 'India');
     const build = (entity) => deptRows.map((d) => {
-      const staff = PERMANENT.filter((p) => (!entity || p.entity === entity) && sameDeptCost(p.dept, d));
-      const perm = staff.filter((p) => p.start && p.start <= asOf).reduce((s, p) => s + salary(p), 0);
-      const temps = activeTemps.filter((t) => sameDeptCost(t.dept, d) && (!entity || t.location === entity));
-      const temp = temps.reduce((s, t) => s + t.cost, 0);
-      const byMonth = pmonths.map((m) => staff.filter((p) => p.start && p.start <= m).reduce((s, p) => s + salary(p), 0) + temp);
+      const inDept = (p) => (!entity || p.entity === entity) && sameDeptCost(p.dept, d);
+      const tIn = (t) => tempEnt(t, entity) && sameDeptCost(t.dept, d);
+      const perm = active.filter(inDept).reduce((s, p) => s + pay(p, asOf), 0);
+      const temp = activeTemps.filter(tIn).reduce((s, t) => s + t.cost, 0);
+      const byMonth = yearMonths.map((mo) => staffIn(mo).filter(inDept).reduce((s, p) => s + pay(p, mo.start), 0)
+        + tempsIn(mo).filter(tIn).reduce((s, t) => s + t.cost, 0));
       return { dept: d, perm, temp, base: perm + temp, byMonth, total: byMonth.reduce((a, b) => a + b, 0) };
     });
     const totalRow = (rows, label) => ({
       dept: label, perm: rows.reduce((s, r) => s + r.perm, 0), temp: rows.reduce((s, r) => s + r.temp, 0),
-      base: rows.reduce((s, r) => s + r.base, 0), byMonth: pmonths.map((_, i) => rows.reduce((s, r) => s + r.byMonth[i], 0)),
+      base: rows.reduce((s, r) => s + r.base, 0), byMonth: yearMonths.map((_, i) => rows.reduce((s, r) => s + r.byMonth[i], 0)),
       total: rows.reduce((s, r) => s + r.total, 0), isTotal: true,
     });
-    const d = build('Dubai'); const i = build('India'); const all = build(null);
+    const d = build('Dubai'); const i = build('India');
+    // Combined includes every temp, also those outside Dubai / India (e.g. UK).
+    const combined = build(null);
     const saving = PERMANENT.filter((p) => p.entity === 'Dubai' && p.salaryPost !== null)
       .reduce((s, p) => s + ((p.salaryPre ?? 0) - p.salaryPost), 0);
     return {
-      months: pmonths, saving, savingMonths: pmonths.length,
+      months: yearMonths, saving, savingMonths: yearMonths.filter((mo) => REDUCTION_DATE && mo.start >= REDUCTION_DATE).length,
       sections: [
         { title: 'DUBAI (UAE)', rows: [...d, totalRow(d, 'DUBAI (UAE) — total')] },
         { title: 'INDIA', rows: [...i, totalRow(i, 'INDIA — total')] },
-        { title: 'COMBINED (Dubai + India + Temp)', rows: [...all, totalRow(all, 'COMBINED (Dubai + India + Temp) — total')] },
+        { title: 'COMBINED (Dubai + India + Temp)', rows: [...combined, totalRow(combined, 'COMBINED (Dubai + India + Temp) — total')] },
       ],
     };
   }
@@ -453,7 +461,7 @@ export function makeModel(asOf = AS_OF) {
   }
 
   const model = {
-    asOf, year, months, bridge, openDate,
+    asOf, year, months, yearMonths, bridge, openDate,
     peopleAt: permanentAt, tempsAt: (d) => TEMPS.filter((t) => tempOnBoard(t, d)),
     salary: (p, d, basis) => salaryOf(p, d, basis), active, activeTemps, joinersYtd, joiningLater, leaversYtd, servingNotice,
     leaversUndated, leaversEarlier, flow,

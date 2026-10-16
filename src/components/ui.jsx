@@ -65,7 +65,7 @@ export function DataTable({ columns, rows, dense, maxHeight, footer }) {
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i} className={r._total ? 'total' : r._muted ? 'muted-row' : ''}>
+            <tr key={i} className={r._total ? 'total' : r._sub ? 'sub-row' : r._muted ? 'muted-row' : ''}>
               {columns.map((c) => (
                 <td key={c.key} className={c.num ? 'num' : ''}>{c.render ? c.render(r) : r[c.key]}</td>
               ))}

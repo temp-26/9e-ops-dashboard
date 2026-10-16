@@ -12,7 +12,6 @@ import Leavers from './sections/Leavers.jsx';
 import EngBim from './sections/EngBim.jsx';
 import People from './sections/People.jsx';
 import Salaries from './sections/Salaries.jsx';
-import Cost from './sections/Cost.jsx';
 import OrgChart from './sections/OrgChart.jsx';
 
 const TABS = [
@@ -23,7 +22,6 @@ const TABS = [
   { id: 'eng-bim', label: 'ENG vs BIM', C: EngBim },
   { id: 'gender', label: 'Gender & Nationality', C: People },
   { id: 'salaries', label: 'Salaries', C: Salaries },
-  { id: 'cost', label: 'Cost Projection', C: Cost },
   { id: 'org', label: 'Org Chart', C: OrgChart },
 ];
 
@@ -34,7 +32,8 @@ export default function App() {
   const auth = useAuth();
   const tabs = TABS;
   const fromHash = () => {
-    const h = window.location.hash.replace('#', '');
+    const raw = window.location.hash.replace('#', '');
+    const h = raw === 'cost' ? 'salaries' : raw; // Cost Projection now sits at the bottom of Salaries
     return tabs.some((t) => t.id === h) ? h : 'overview';
   };
   const [tab, setTab] = useState(fromHash);

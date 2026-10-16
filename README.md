@@ -119,7 +119,13 @@ The Excel file itself is never uploaded (it's excluded in `.gitignore`). Only th
   that person is not counted as well.
 - **Active staff** = start date on or before the as-of date. "TBC" start dates are not counted.
 - **Monthly charts** (headcount, salaries) are rebuilt from start dates and last working days.
-  They run from January to the as-of date.
+  Headcount runs from January to the as-of date. **Salaries** and the **Cost Projection**
+  (at the bottom of the Salaries tab) run January to December: months after the as-of date
+  are projected from today's staff, future joiners from their start date, and today's temp
+  staff held flat. They show as lighter bars and are marked * in the tables.
+- On the Salaries tab, the **Monthly Workforce Cost** table, the current month's salary bar and
+  the Cost Projection all use the same staff and the same India basis (switch at the top),
+  so they always agree.
 - **Salaries:** Dubai uses Total Current Salary before the reduction date, then "Effective Salary Jun-26".
   India uses "Total Monthly Salary in AED" (incl. 35% Access), with a switch to salary only.
 - Nothing after the chosen date is shown. On today's date, the Excel lists are taken as they

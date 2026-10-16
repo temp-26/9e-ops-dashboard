@@ -1,5 +1,5 @@
 import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LabelList,
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LabelList, Cell,
 } from 'recharts';
 import { fmtInt, fmtCompact, Legend } from './ui.jsx';
 import { useSalary } from '../lib/auth.jsx';
@@ -83,9 +83,10 @@ export function MonthlyStack({ data, series, totalKey = 'Total', detailKeys, mon
 
 function SimpleTip({ active, payload, label, fmt = fmtInt }) {
   if (!active || !payload?.length) return null;
+  const row = payload[0].payload;
   return (
     <div className="tip">
-      <div className="tip-title">{label}</div>
+      <div className="tip-title">{label}{row?.projected ? ' · projected' : row?.partial ? ' · to date' : ''}</div>
       {payload.map((p) => <div className="tip-row" key={p.dataKey}><span>{p.name}</span><b>{fmt(p.value)}</b></div>)}
     </div>
   );
@@ -97,6 +98,7 @@ export function Bars({ data, cat, series, stacked, horizontal, height = 300, lab
   const { visible } = useSalary();
   if (money && !visible) return <SalaryHidden height={height} />; // money charts never draw while hidden
   const topKey = (row) => [...series].reverse().find((x) => row[x.key])?.key;
+  const hasProjected = data.some((d) => d.projected);
   return (
     <>
       <div className="chart" style={{ height }}>
@@ -120,6 +122,7 @@ export function Bars({ data, cat, series, stacked, horizontal, height = 300, lab
                 onClick={onBarClick ? (entry, idx) => onBarClick(data[idx] ?? entry?.payload, s.key) : undefined}
                 style={onBarClick ? { cursor: 'pointer' } : undefined}
                 stroke="#fff" strokeWidth={stacked ? 1 : 0} radius={stacked ? 0 : horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]} isAnimationActive={false}>
+                {hasProjected && data.map((d, i) => <Cell key={i} fillOpacity={d.projected ? 0.38 : 1} />)}
                 {labels && (
                   <LabelList dataKey={cat} position={horizontal ? 'right' : 'top'} content={(p) => {
                     const row = data.find((d) => d[cat] === p.value) ?? data[p.index];
@@ -138,7 +141,7 @@ export function Bars({ data, cat, series, stacked, horizontal, height = 300, lab
         </ResponsiveContainer>
       </div>
       {series.length > 1 && <Legend items={series.map((s) => ({ label: s.label, color: s.color }))} />}
-      {onBarClick && <p className="hint">Click a bar to see the people.</p>}
+      {(onBarClick || hasProjected) && <p className="hint">{[hasProjected && 'Lighter bars are projected months.', onBarClick && 'Click a bar to see the people.'].filter(Boolean).join(' ')}</p>}
     </>
   );
 }
