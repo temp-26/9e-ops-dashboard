@@ -34,8 +34,11 @@ function WorkforceCost({ m, basis, monthLabel }) {
   const indAcc = withPay(m.active.filter((p) => p.entity === 'India'), 'access');
   const sum = (l) => l.reduce((s, p) => s + (p.amount ?? 0), 0);
   const tempCost = m.activeTemps.reduce((s, t) => s + t.cost, 0);
-  const dubCost = sum(dub); const indCost = sum(ind);
-  const access = basis === 'access' ? sum(indAcc) - indCost : 0;
+  // Amounts aligned to the Excel "Cost projection" sheet for this month (the people lists stay as they were).
+  const now = m.months.length - 1;
+  const dubCost = m.salaryRows('UAE', 'salary')[now].Total;
+  const indCost = m.salaryRows('India', 'salary')[now].Total;
+  const access = basis === 'access' ? m.salaryRows('India', 'access')[now].Total - indCost : 0;
   const accessList = indAcc.map((p, i) => ({ ...p, amount: (p.amount ?? 0) - (ind[i].amount ?? 0) }));
   const f2 = (v) => fmtNum(v, 2);
   const perm = dubCost + indCost + access;
@@ -64,10 +67,11 @@ export default function Salaries({ m }) {
   const { visible, money } = useSalary();
   const [scope, setScope] = useState('all');
   // Jan..Dec; months after the as-of month are projected.
-  const uae = m.monthlySalaries('UAE', 'salary', true);
-  const indSal = m.monthlySalaries('India', 'salary', true);
-  const indAcc = m.monthlySalaries('India', 'access', true);
-  const rows = m.monthlySalaries(scope, basis, true); // department detail (table + trend)
+  // Figures aligned to the Excel "Cost projection" sheet (see salaryRows in model.js).
+  const uae = m.salaryRows('UAE', 'salary');
+  const indSal = m.salaryRows('India', 'salary');
+  const indAcc = m.salaryRows('India', 'access');
+  const rows = m.salaryRows(scope, basis); // department detail (table + trend)
   const temps = m.monthlyTempCost(scope);
   const last = m.months.length - 1; // the as-of month (KPIs and changes are to date)
   const showUae = scope !== 'India';

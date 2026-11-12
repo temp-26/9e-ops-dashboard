@@ -273,6 +273,91 @@ export const sameDeptCost = (a, b) => deptKey(a) === deptKey(b);
 // simply as "Site" (rather than Structures-Site / MEP-Site), one "Site" row is shown instead.
 let deptRows = EXCEL_DEPTS;
 
+// ---------- "Cost projection" sheet (read exactly as in the Excel) ----------
+// The sheet has three blocks (DUBAI (UAE), INDIA, COMBINED), each with a "Department" header row:
+// Department | Permanent (AED) | Jan .. Dec (dates) | Total. Every figure is taken as saved in
+// the Excel (formulas as their last calculated value); nothing is recalculated here.
+const COST_SHEET_NAMES = ['Cost projection', 'Cost Projection', 'Cost projections', 'Cost Projections'];
+function excelCostProjection(yearMonths) {
+  const sheet = COST_SHEET_NAMES.find((n) => hasSheet(n));
+  if (!sheet) return null;
+  const c = cells(sheet);
+  const num = (v) => (typeof v === 'number' ? v : toNum(text(v).replace(/[^0-9.-]/g, '') || null) ?? 0);
+  const monthOf = (v) => {
+    if (v instanceof Date) return v.getUTCMonth();
+    const m = text(v).match(/^(\d{4})-(\d{2})-\d{2}/);
+    if (m) return Number(m[2]) - 1;
+    const d = toDate(v);
+    return d ? d.getUTCMonth() : null;
+  };
+  const sections = [];
+  let saving = null; let cutDate = null;
+  c.forEach((row, r) => {
+    row.forEach((v, ci) => {
+      const t = text(v).toLowerCase();
+      if (saving === null && t.includes('monthly saving')) {
+        const n = row.slice(ci + 1).find((x) => typeof x === 'number' || toNum(x) !== null);
+        if (n !== undefined) saving = num(n);
+      }
+      if (!cutDate && t.includes('cut effective')) {
+        const d = row.slice(ci + 1).map((x) => toDate(x)).find(Boolean);
+        if (d) cutDate = d;
+      }
+    });
+    const dc = row.findIndex((v) => text(v).toLowerCase() === 'department');
+    if (dc < 0) return;
+    // Title = first text cell in the row(s) just above the header.
+    let title = '';
+    for (let up = r - 1; up >= 0 && !title; up--) title = text((c[up] || []).find((x) => typeof x === 'string' && text(x)));
+    // Month columns: header cells after "Permanent (AED)" that read as a date; else by position.
+    const permCol = row.findIndex((v, i) => i > dc && /permanent/i.test(text(v)));
+    const firstMonth = (permCol >= 0 ? permCol : dc) + 1;
+    const monthCols = new Array(12).fill(-1);
+    let pos = 0;
+    for (let i = firstMonth; i < row.length && pos < 12; i++) {
+      const h = text(row[i]).toLowerCase();
+      if (!h || h.includes('total')) break;
+      const m = monthOf(row[i]);
+      monthCols[m ?? pos] = i;
+      pos++;
+    }
+    const totalCol = row.findIndex((v, i) => i > dc && /total/i.test(text(v)));
+    const rows = [];
+    for (let rr = r + 1; rr < c.length; rr++) {
+      const line = c[rr] || [];
+      const dept = text(line[dc]);
+      if (!dept) break;
+      const byMonth = yearMonths.map((mo) => (monthCols[mo.m] >= 0 ? num(line[monthCols[mo.m]]) : 0));
+      const sumMonths = byMonth.reduce((a, b) => a + b, 0);
+      const total = totalCol >= 0 && line[totalCol] !== null && line[totalCol] !== '' ? num(line[totalCol]) : sumMonths;
+      const perm = permCol >= 0 ? num(line[permCol]) : 0;
+      const isTotal = /total/i.test(dept);
+      rows.push({ dept, perm, temp: 0, base: perm, byMonth, total, ...(isTotal ? { isTotal: true } : {}) });
+      if (isTotal) break;
+    }
+    if (rows.length) {
+      // If the block has no total row, add one so the table still ends with a total.
+      if (!rows[rows.length - 1].isTotal) {
+        rows.push({
+          dept: `${title} — total`, perm: rows.reduce((s, x) => s + x.perm, 0), temp: 0,
+          base: rows.reduce((s, x) => s + x.base, 0),
+          byMonth: yearMonths.map((_, i) => rows.reduce((s, x) => s + x.byMonth[i], 0)),
+          total: rows.reduce((s, x) => s + x.total, 0), isTotal: true,
+        });
+      }
+      sections.push({ title: title || `Block ${sections.length + 1}`, rows });
+    }
+  });
+  if (!sections.length) return null;
+  const cut = cutDate ?? REDUCTION_DATE;
+  return {
+    months: yearMonths, source: 'excel', sheet,
+    saving: saving ?? 0,
+    savingMonths: yearMonths.filter((mo) => cut && mo.start >= cut).length,
+    sections,
+  };
+}
+
 const cache = new Map();
 export function makeModel(asOf = AS_OF) {
   const key = asOf.getTime();
@@ -302,6 +387,60 @@ export function makeModel(asOf = AS_OF) {
     : permanentAt(mo.end));
   const tempsIn = (mo) => (mo.projected ? activeTemps : TEMPS.filter((t) => tempOnBoard(t, mo.end)));
   const yearStart = monthStart(year, 0);
+
+  // ---------- Salaries tab: figures aligned to the Excel "Cost projection" sheet ----------
+  // The sheet holds, per entity, department and month, the cost of permanent staff + temp staff
+  // (India on the salary-only basis). It is split back into the parts the Salaries tab shows:
+  //   temp staff = the dashboard's own temp cost (Temp Staff sheet, unchanged)
+  //   salaries   = the sheet's figure − those temps   (so salaries + temps = the Excel figure)
+  //   India 35% Access = India salaries × the Access share found in India Details (added on top,
+  //   only when the "India incl. 35% Access" switch is on, as before).
+  // Nothing outside the Salaries tab uses these. Without the sheet, everything is calculated as before.
+  let excelCp;
+  const excelCost = () => (excelCp === undefined ? (excelCp = excelCostProjection(yearMonths)) : excelCp);
+  let splitCache;
+  function excelSplit() {
+    if (splitCache !== undefined) return splitCache;
+    splitCache = null;
+    const cp = excelCost();
+    if (!cp) return null;
+    const dubai = cp.sections.find((s) => /dubai|uae/i.test(s.title) && !/combined/i.test(s.title));
+    const india = cp.sections.find((s) => /india/i.test(s.title) && !/combined/i.test(s.title));
+    if (!dubai || !india) return null;
+    const compSal = monthlySalaries('India', 'salary', true);
+    const compAcc = monthlySalaries('India', 'access', true);
+    const temps = yearMonths.map((mo) => tempsIn(mo));
+    const lines = [];
+    [['UAE', dubai], ['India', india]].forEach(([country, block]) => {
+      block.rows.filter((r) => !r.isTotal).forEach((r) => {
+        const group = groupOf(r.dept);
+        const temp = yearMonths.map((_, i) => temps[i]
+          .filter((t) => t.country === country && sameDeptCost(t.dept, r.dept)).reduce((s, t) => s + t.cost, 0));
+        const salary = r.byMonth.map((v, i) => v - temp[i]);
+        const access = salary.map((v, i) => {
+          if (country !== 'India') return 0;
+          const ratio = compSal[i][group] ? compAcc[i][group] / compSal[i][group] : 1 + ACCESS_RATIO;
+          return v * (ratio - 1);
+        });
+        lines.push({ country, dept: r.dept, group, sheet: r.byMonth, perm: r.perm, temp, salary, access });
+      });
+    });
+    splitCache = { cp, lines };
+    return splitCache;
+  }
+  // Same shape as monthlySalaries(scope, basis, true): one row per month Jan..Dec, per department group.
+  function salaryRows(scope = 'all', indiaBasis = 'salary') {
+    const sp = excelSplit();
+    if (!sp) return monthlySalaries(scope, indiaBasis, true);
+    const use = sp.lines.filter((l) => scope === 'all' || l.country === scope);
+    return yearMonths.map((mo, i) => {
+      const row = { label: mo.label, partial: mo.partial, projected: !!mo.projected, missing: 0 };
+      GROUPS.forEach((g) => { row[g] = 0; });
+      use.forEach((l) => { row[l.group] = (row[l.group] || 0) + l.salary[i] + (indiaBasis === 'access' ? l.access[i] : 0); });
+      row.Total = use.reduce((s, l) => s + l.salary[i] + (indiaBasis === 'access' ? l.access[i] : 0), 0);
+      return row;
+    });
+  }
 
   // --- joiners & leavers ---
   const everyone = [...PERMANENT, ...LEAVERS];
@@ -422,6 +561,37 @@ export function makeModel(asOf = AS_OF) {
   // Departmental cost, Jan..Dec: permanent salaries + temp staff, by entity and combined.
   // Months up to today are from the data; later months are projected (see yearMonths).
   function costProjection(indiaBasis = 'salary') {
+    // If the Excel has a "Cost projection" sheet, its figures are shown exactly as typed there
+    // (Finance's month-by-month numbers). The calculation below is only a fallback for an Excel
+    // without that sheet.
+    const sp = excelSplit();
+    if (sp) {
+      // Month figures = the Excel sheet (+ India 35% Access when that basis is chosen).
+      // Permanent / Temp columns = this month's salaries and temp staff, as the dashboard showed them.
+      const now = lastM;
+      const acc = (l, i) => (indiaBasis === 'access' ? l.access[i] : 0);
+      const rowOf = (dept, ls) => {
+        const byMonth = yearMonths.map((_, i) => ls.reduce((t, l) => t + l.salary[i] + l.temp[i] + acc(l, i), 0));
+        const perm = ls.reduce((t, l) => t + l.salary[now] + acc(l, now), 0);
+        const temp = ls.reduce((t, l) => t + l.temp[now], 0);
+        return { dept, perm, temp, base: perm + temp, byMonth, total: byMonth.reduce((a, b) => a + b, 0) };
+      };
+      const totalOf = (rows, label) => ({
+        dept: label, perm: rows.reduce((t, r) => t + r.perm, 0), temp: rows.reduce((t, r) => t + r.temp, 0),
+        base: rows.reduce((t, r) => t + r.base, 0), byMonth: yearMonths.map((_, i) => rows.reduce((t, r) => t + r.byMonth[i], 0)),
+        total: rows.reduce((t, r) => t + r.total, 0), isTotal: true,
+      });
+      const sections = sp.cp.sections.map((sec) => {
+        const combined = /combined/i.test(sec.title);
+        const country = /india/i.test(sec.title) && !combined ? 'India' : 'UAE';
+        const body = sec.rows.filter((r) => !r.isTotal).map((r) => rowOf(r.dept, combined
+          ? sp.lines.filter((l) => sameDeptCost(l.dept, r.dept))
+          : sp.lines.filter((l) => l.country === country && l.dept === r.dept)));
+        const label = sec.rows.find((r) => r.isTotal)?.dept ?? `${sec.title} — total`;
+        return { title: sec.title, rows: [...body, totalOf(body, label)] };
+      });
+      return { months: yearMonths, saving: sp.cp.saving, savingMonths: sp.cp.savingMonths, sections };
+    }
     const pay = (p, at) => salaryOf(p, at, indiaBasis) ?? 0;
     const tempEnt = (t, entity) => !entity || (entity === 'Dubai' ? t.country === 'UAE' : t.country === 'India');
     const build = (entity) => deptRows.map((d) => {
@@ -472,7 +642,7 @@ export function makeModel(asOf = AS_OF) {
     salary: (p, d, basis) => salaryOf(p, d, basis), active, activeTemps, joinersYtd, joiningLater, leaversYtd, servingNotice,
     leaversUndated, leaversEarlier, flow,
     avgJoiners: { count: joinersYtd.length, months: monthsElapsed, avg: monthsElapsed ? joinersYtd.length / monthsElapsed : 0 },
-    monthlyHeadcount, monthlySalaries, monthlyTempCost, breakup, engVsBim, summary, costProjection,
+    monthlyHeadcount, monthlySalaries, monthlyTempCost, salaryRows, breakup, engVsBim, summary, costProjection,
   };
   cache.set(key, model);
   return model;
