@@ -390,11 +390,12 @@ export function makeModel(asOf = AS_OF) {
 
   // ---------- Salaries tab: figures aligned to the Excel "Cost projection" sheet ----------
   // The sheet holds, per entity, department and month, the cost of permanent staff + temp staff
-  // (India on the salary-only basis). It is split back into the parts the Salaries tab shows:
+  // (India INCLUDING the 35% Access). It is split back into the parts the Salaries tab shows:
   //   temp staff = the dashboard's own temp cost (Temp Staff sheet, unchanged)
   //   salaries   = the sheet's figure − those temps   (so salaries + temps = the Excel figure)
-  //   India 35% Access = India salaries × the Access share found in India Details (added on top,
-  //   only when the "India incl. 35% Access" switch is on, as before).
+  //   India: the sheet's figure − temps is salary + 35% Access; it is divided back into salary and
+  //   Access using the Access share found in India Details. With "India incl. 35% Access" the totals
+  //   equal the sheet; with "India salary only" the Access part is left out.
   // Nothing outside the Salaries tab uses these. Without the sheet, everything is calculated as before.
   let excelCp;
   const excelCost = () => (excelCp === undefined ? (excelCp = excelCostProjection(yearMonths)) : excelCp);
@@ -416,12 +417,11 @@ export function makeModel(asOf = AS_OF) {
         const group = groupOf(r.dept);
         const temp = yearMonths.map((_, i) => temps[i]
           .filter((t) => t.country === country && sameDeptCost(t.dept, r.dept)).reduce((s, t) => s + t.cost, 0));
-        const salary = r.byMonth.map((v, i) => v - temp[i]);
-        const access = salary.map((v, i) => {
-          if (country !== 'India') return 0;
-          const ratio = compSal[i][group] ? compAcc[i][group] / compSal[i][group] : 1 + ACCESS_RATIO;
-          return v * (ratio - 1);
-        });
+        const perm = r.byMonth.map((v, i) => v - temp[i]); // permanent staff (India: incl. Access)
+        const ratioAt = (i) => (country !== 'India' ? 1
+          : compSal[i][group] ? compAcc[i][group] / compSal[i][group] : 1 + ACCESS_RATIO);
+        const salary = perm.map((v, i) => v / ratioAt(i));
+        const access = perm.map((v, i) => v - salary[i]);
         lines.push({ country, dept: r.dept, group, sheet: r.byMonth, perm: r.perm, temp, salary, access });
       });
     });
